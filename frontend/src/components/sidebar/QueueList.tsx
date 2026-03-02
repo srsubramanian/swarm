@@ -3,7 +3,7 @@ import QueueItem from './QueueItem';
 
 interface QueueListProps {
   conversations: Conversation[];
-  selectedId: string;
+  selectedId: string | null;
   actionedMap: Record<string, string>;
   onSelect: (id: string) => void;
 }

@@ -148,7 +148,7 @@ Accept: text/event-stream
 ###
 
 # ============================================================
-# Mock Event Queue (SWARM_MOCK_MODE=true)
+# Event Queue (submit scenarios by name, results are persisted)
 # ============================================================
 
 ### List available scenarios
@@ -215,5 +215,24 @@ Accept: text/event-stream
 {
   "scenario": "security_alert"
 }
+
+###
+
+# ============================================================
+# Conversation History
+# ============================================================
+
+### List all conversations (newest first)
+GET http://localhost:3000/api/conversations
+
+###
+
+### Get a single conversation by ID (paste ID from queue response)
+GET http://localhost:3000/api/conversations/PASTE-CONVERSATION-ID-HERE
+
+###
+
+### Clear all conversations (reset for demo)
+DELETE http://localhost:3000/api/conversations
 
 ###

@@ -1,6 +1,5 @@
-import { useState } from 'react';
-import type { ViewMode, AgentRole } from '../../types';
-import { mockConversations } from '../../data/mockData';
+import { useState, useEffect, useCallback } from 'react';
+import type { Conversation, ViewMode, AgentRole } from '../../types';
 import QueueList from '../sidebar/QueueList';
 import ConversationHeader from '../conversation/ConversationHeader';
 import MessageList from '../conversation/MessageList';
@@ -9,13 +8,38 @@ import ActionBar from '../conversation/ActionBar';
 import MemoryDrawer from '../memory/MemoryDrawer';
 import AgentIcon from '../shared/AgentIcon';
 
+const API_POLL_INTERVAL = 3000;
+
 export default function AppShell() {
-  const [selectedId, setSelectedId] = useState(mockConversations[0].id);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('full');
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [actionedMap, setActionedMap] = useState<Record<string, string>>({});
 
-  const conversation = mockConversations.find((c) => c.id === selectedId)!;
+  const fetchConversations = useCallback(async () => {
+    try {
+      const resp = await fetch('/api/conversations');
+      if (!resp.ok) return;
+      const data: Conversation[] = await resp.json();
+      setConversations(data);
+      setSelectedId((prev) => {
+        if (data.length === 0) return null;
+        if (!prev || !data.find((c) => c.id === prev)) return data[0].id;
+        return prev;
+      });
+    } catch {
+      // API not available
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchConversations();
+    const interval = setInterval(fetchConversations, API_POLL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [fetchConversations]);
+
+  const conversation = selectedId ? conversations.find((c) => c.id === selectedId) : null;
 
   const handleSelectConversation = (id: string) => {
     setSelectedId(id);
@@ -23,7 +47,9 @@ export default function AppShell() {
   };
 
   const handleAction = (optionId: string) => {
-    setActionedMap((prev) => ({ ...prev, [selectedId]: optionId }));
+    if (selectedId) {
+      setActionedMap((prev) => ({ ...prev, [selectedId]: optionId }));
+    }
   };
 
   return (
@@ -36,7 +62,7 @@ export default function AppShell() {
         </div>
 
         <QueueList
-          conversations={mockConversations}
+          conversations={conversations}
           selectedId={selectedId}
           actionedMap={actionedMap}
           onSelect={handleSelectConversation}
@@ -59,52 +85,69 @@ export default function AppShell() {
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
-        <ConversationHeader
-          conversation={conversation}
-          viewMode={viewMode}
-          onViewModeChange={setViewMode}
-        />
+        {conversation ? (
+          <>
+            <ConversationHeader
+              conversation={conversation}
+              viewMode={viewMode}
+              onViewModeChange={setViewMode}
+            />
 
-        <div className="flex-1 overflow-y-auto">
-          {viewMode === 'full' ? (
-            <MessageList messages={conversation.messages} />
-          ) : (
-            <div className="max-w-3xl mx-auto px-6 py-6 space-y-3">
-              {conversation.agents.map((agent) => (
-                <div
-                  key={agent.role}
-                  className="flex items-start gap-3 rounded-lg bg-white p-4 shadow-sm ring-1 ring-gray-900/5"
-                >
-                  <AgentIcon role={agent.role} />
-                  <div>
-                    <p className="text-sm font-medium text-gray-900">{agent.name}</p>
-                    <p className="text-sm text-gray-600 mt-0.5">{agent.position}</p>
-                  </div>
+            <div className="flex-1 overflow-y-auto">
+              {viewMode === 'full' ? (
+                <MessageList messages={conversation.messages} />
+              ) : (
+                <div className="max-w-3xl mx-auto px-6 py-6 space-y-3">
+                  {conversation.agents.map((agent) => (
+                    <div
+                      key={agent.role}
+                      className="flex items-start gap-3 rounded-lg bg-white p-4 shadow-sm ring-1 ring-gray-900/5"
+                    >
+                      <AgentIcon role={agent.role} />
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">{agent.name}</p>
+                        <p className="text-sm text-gray-600 mt-0.5">{agent.position}</p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
+
+              <div className="max-w-3xl mx-auto px-6 pb-6">
+                <ModeratorSummary summary={conversation.moderatorSummary} />
+              </div>
             </div>
-          )}
 
-          <div className="max-w-3xl mx-auto px-6 pb-6">
-            <ModeratorSummary summary={conversation.moderatorSummary} />
+            {memoryOpen && (
+              <MemoryDrawer
+                memory={conversation.clientMemory}
+                onClose={() => setMemoryOpen(false)}
+              />
+            )}
+
+            <ActionBar
+              options={conversation.actionRequired.options}
+              isActioned={!!actionedMap[selectedId!]}
+              actionedOptionId={actionedMap[selectedId!]}
+              onAction={handleAction}
+              memoryOpen={memoryOpen}
+              onToggleMemory={() => setMemoryOpen((prev) => !prev)}
+            />
+          </>
+        ) : (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center">
+              <p className="text-lg font-medium text-gray-400">No events in queue</p>
+              <p className="text-sm text-gray-300 mt-1">
+                Submit a scenario via the API to get started
+              </p>
+              <code className="block mt-4 text-xs text-gray-400 bg-gray-100 rounded-lg px-4 py-3">
+                curl -X POST /api/queue -H &quot;Content-Type: application/json&quot; -d
+                &#123;&quot;scenario&quot;:&quot;wire_transfer&quot;&#125;
+              </code>
+            </div>
           </div>
-        </div>
-
-        {memoryOpen && (
-          <MemoryDrawer
-            memory={conversation.clientMemory}
-            onClose={() => setMemoryOpen(false)}
-          />
         )}
-
-        <ActionBar
-          options={conversation.actionRequired.options}
-          isActioned={!!actionedMap[selectedId]}
-          actionedOptionId={actionedMap[selectedId]}
-          onAction={handleAction}
-          memoryOpen={memoryOpen}
-          onToggleMemory={() => setMemoryOpen((prev) => !prev)}
-        />
       </div>
     </div>
   );
