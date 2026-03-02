@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from botocore.config import Config as BotoConfig
 from langchain_aws import ChatBedrockConverse
 
 from app.core.config import get_settings
@@ -15,4 +16,7 @@ def get_llm() -> ChatBedrockConverse:
         region_name=settings.bedrock_region,
         temperature=settings.llm_temperature,
         max_tokens=settings.llm_max_tokens,
+        config=BotoConfig(
+            retries={"max_attempts": 8, "mode": "adaptive"},
+        ),
     )
