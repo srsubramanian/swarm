@@ -1,6 +1,20 @@
 """Pydantic models for structured LLM output from agents and moderator."""
 
-from pydantic import BaseModel, Field
+import re
+
+from pydantic import BaseModel, Field, field_validator
+
+
+def _coerce_to_list(v: object) -> list[str]:
+    """LLMs sometimes return a bullet-point string instead of a JSON array."""
+    if isinstance(v, list):
+        return v
+    if isinstance(v, str):
+        lines = re.split(r"\n(?:[•\-\*]\s*|\d+\.\s*)", v)
+        # First element may start with a bullet too
+        first = re.sub(r"^[•\-\*]\s*", "", lines[0])
+        return [l.strip() for l in [first, *lines[1:]] if l.strip()]
+    return [str(v)]
 
 
 class AgentAnalysis(BaseModel):
@@ -11,8 +25,13 @@ class AgentAnalysis(BaseModel):
     analysis: str = Field(description="Detailed analysis in markdown")
     risk_level: str = Field(description="One of: critical, high, medium, low")
     confidence: str = Field(description="One of: high, medium, low")
-    key_findings: list[str] = Field(description="2-5 key findings as bullet points")
+    key_findings: list[str] = Field(description="2-5 key findings as a JSON array of strings")
     recommended_action: str = Field(description="Specific recommended next step")
+
+    @field_validator("key_findings", mode="before")
+    @classmethod
+    def coerce_key_findings(cls, v: object) -> list[str]:
+        return _coerce_to_list(v)
 
 
 class ActionItem(BaseModel):
@@ -35,6 +54,11 @@ class ModeratorSynthesis(BaseModel):
     )
     risk_level: str = Field(description="Overall risk: critical, high, medium, low")
     risk_assessment: str = Field(description="Brief risk justification")
-    key_decisions: list[str] = Field(description="1-3 most important findings for RM")
-    next_steps: list[str] = Field(description="Concrete next steps")
+    key_decisions: list[str] = Field(description="1-3 most important findings for RM as a JSON array of strings")
+    next_steps: list[str] = Field(description="Concrete next steps as a JSON array of strings")
     action_items: list[ActionItem] = Field(description="2-4 actions for the RM queue")
+
+    @field_validator("key_decisions", "next_steps", mode="before")
+    @classmethod
+    def coerce_lists(cls, v: object) -> list[str]:
+        return _coerce_to_list(v)
