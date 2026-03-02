@@ -21,7 +21,7 @@ uv sync          # Install Python dependencies
 uv run uvicorn app.main:app --reload
 ```
 
-The backend runs on `http://localhost:8000` with auto-reload on file changes.
+The backend runs on `http://localhost:8000` with auto-reload on file changes. Use the [event queue](/docs/event-queue) to quickly submit pre-built scenarios.
 
 ### Lint and format
 
@@ -76,12 +76,16 @@ swarmops/
 │   │   ├── main.py              # FastAPI entrypoint
 │   │   ├── core/config.py       # Settings (SWARM_ env prefix)
 │   │   ├── schemas/events.py    # API request/response models
-│   │   ├── api/conversations.py # Analyze endpoints
+│   │   ├── api/
+│   │   │   ├── conversations.py # Analyze endpoints
+│   │   │   └── queue.py         # Queue endpoints (scenario shortcuts)
 │   │   └── agents/
 │   │       ├── orchestrator.py  # LangGraph StateGraph
 │   │       ├── state.py         # SwarmState TypedDict
 │   │       ├── schemas.py       # Agent/Moderator output models
-│   │       ├── llm.py           # Cached Bedrock LLM
+│   │       ├── llm.py           # LLM — Bedrock (live) or MockLLM (mock)
+│   │       ├── mock_responses.py # Pre-built responses (4 scenarios)
+│   │       ├── scenarios.py     # Pre-built AnalyzeRequest objects
 │   │       ├── nodes/           # Agent implementations
 │   │       └── prompts/         # Markdown prompt templates
 │   └── tests/
@@ -121,6 +125,7 @@ The project is built incrementally:
 2. Basic conversation CRUD + single agent call
 3. ~~LangGraph orchestrator with parallel agents~~ **DONE**
 4. ~~SSE streaming~~ **DONE**
+4.5. ~~Mock event queue~~ **DONE** — mock mode for local dev without Bedrock
 5. Action items + RM queue
 6. Client memory (read/write/approve)
 7. ARQ background tasks (knowledge extraction, archival)

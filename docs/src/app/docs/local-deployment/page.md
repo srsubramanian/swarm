@@ -94,6 +94,19 @@ You should receive a JSON response with three agent analyses and a moderator syn
 SWARM_BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-20250514-v1:0 docker compose up -d
 ```
 
+### Use the event queue (shortcut)
+
+Instead of constructing full JSON payloads, submit pre-built scenarios by name via the [queue endpoints](/docs/api-queue):
+
+```shell
+curl http://localhost:3000/api/queue/scenarios
+curl -X POST http://localhost:3000/api/queue \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "wire_transfer"}'
+```
+
+See the [event queue guide](/docs/event-queue) for all available scenarios.
+
 ### Stop everything
 
 ```shell

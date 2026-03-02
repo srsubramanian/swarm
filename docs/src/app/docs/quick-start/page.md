@@ -94,6 +94,29 @@ You'll see SSE events in this order:
 
 ---
 
+## Use the event queue (shortcut)
+
+Instead of constructing full JSON payloads, submit pre-built scenarios by name:
+
+```shell
+# List available scenarios
+curl http://localhost:3000/api/queue/scenarios
+
+# Submit a scenario (sync)
+curl -X POST http://localhost:3000/api/queue \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "wire_transfer"}'
+
+# Submit a scenario (SSE stream)
+curl -X POST http://localhost:3000/api/queue/stream \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "security_alert"}'
+```
+
+Four scenarios are available: `wire_transfer`, `velocity_alert`, `security_alert`, `cash_deposit`. See the [Queue API reference](/docs/api-queue) for details.
+
+---
+
 ## Switch the LLM model
 
 By default SwarmOps uses Claude Haiku 4.5 on Bedrock. To use a different model:
@@ -124,4 +147,5 @@ docker compose down -v
 
 - [System overview](/docs/system-overview) — Understand the full architecture
 - [API reference](/docs/api-analyze) — Explore request/response schemas
+- [Event queue](/docs/event-queue) — Submit scenarios by name to observe agent reactions
 - [Development guide](/docs/development) — Run backend and frontend locally without Docker

@@ -23,7 +23,12 @@ uv run pytest tests/test_orchestrator.py -v
 
 ## Test structure
 
-**File:** `backend/tests/test_orchestrator.py`
+Tests are spread across two files:
+
+- `backend/tests/test_orchestrator.py` — Graph topology, mocked LLM execution, API response (6 tests)
+- `backend/tests/test_queue.py` — Scenario registry and queue endpoint tests (11 tests)
+
+### test_orchestrator.py
 
 Tests are organized into three classes:
 
@@ -123,11 +128,44 @@ This approach tests the full graph topology and state flow without making actual
 
 ---
 
+### test_queue.py
+
+Tests the scenario registry and queue endpoints, organized into two classes:
+
+**TestScenarios** — Validates the scenario registry:
+
+```python
+class TestScenarios:
+    def test_all_four_scenarios_exist(self): ...
+    def test_scenarios_are_valid_requests(self): ...
+    def test_wire_transfer_has_expected_data(self): ...
+    def test_velocity_alert_has_expected_data(self): ...
+    def test_security_alert_has_expected_data(self): ...
+    def test_cash_deposit_has_expected_data(self): ...
+```
+
+**TestQueueEndpoints** — API integration tests using the same mocked-LLM pattern as `test_orchestrator.py`:
+
+```python
+class TestQueueEndpoints:
+    async def test_list_scenarios(self): ...
+    async def test_queue_sync_returns_full_analysis(self): ...
+    async def test_queue_unknown_scenario_returns_404(self): ...
+    async def test_queue_stream_unknown_scenario_returns_404(self): ...
+    async def test_queue_delegates_to_analyze(self): ...
+```
+
+Queue endpoint tests that invoke the graph use the same `patch("app.agents.nodes.*.get_llm")` pattern to mock the LLM at the node level.
+
+---
+
 ## Manual API testing
 
 **File:** `backend/requests.http`
 
-An HTTP client file with 7 pre-built test requests:
+An HTTP client file with pre-built test requests:
+
+**Analyze endpoints** (require Bedrock):
 
 1. `GET /health` — Health check
 2. `POST /api/analyze` — $2.4M wire to Cyprus (sync)
@@ -136,6 +174,16 @@ An HTTP client file with 7 pre-built test requests:
 5. `POST /api/analyze` — $9,800 cash deposit structuring (sync)
 6. `POST /api/analyze/stream` — Wire transfer (SSE)
 7. `POST /api/analyze/stream` — Suspicious login (SSE)
+
+**Queue endpoints** (submit scenarios by name):
+
+8. `GET /api/queue/scenarios` — List available scenarios
+9. `POST /api/queue` — Wire transfer (sync)
+10. `POST /api/queue` — Velocity alert (sync)
+11. `POST /api/queue` — Security alert (sync)
+12. `POST /api/queue` — Cash deposit (sync)
+13. `POST /api/queue/stream` — Wire transfer (SSE)
+14. `POST /api/queue/stream` — Security alert (SSE)
 
 Use with VS Code REST Client extension or IntelliJ HTTP Client.
 

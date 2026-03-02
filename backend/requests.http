@@ -146,3 +146,74 @@ Accept: text/event-stream
 }
 
 ###
+
+# ============================================================
+# Mock Event Queue (SWARM_MOCK_MODE=true)
+# ============================================================
+
+### List available scenarios
+GET http://localhost:3000/api/queue/scenarios
+
+###
+
+### Queue: Wire Transfer (sync)
+POST http://localhost:3000/api/queue
+Content-Type: application/json
+
+{
+  "scenario": "wire_transfer"
+}
+
+###
+
+### Queue: Velocity Alert (sync)
+POST http://localhost:3000/api/queue
+Content-Type: application/json
+
+{
+  "scenario": "velocity_alert"
+}
+
+###
+
+### Queue: Security Alert (sync)
+POST http://localhost:3000/api/queue
+Content-Type: application/json
+
+{
+  "scenario": "security_alert"
+}
+
+###
+
+### Queue: Cash Deposit (sync)
+POST http://localhost:3000/api/queue
+Content-Type: application/json
+
+{
+  "scenario": "cash_deposit"
+}
+
+###
+
+### Queue: Wire Transfer (SSE stream)
+POST http://localhost:3000/api/queue/stream
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "scenario": "wire_transfer"
+}
+
+###
+
+### Queue: Security Alert (SSE stream)
+POST http://localhost:3000/api/queue/stream
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "scenario": "security_alert"
+}
+
+###

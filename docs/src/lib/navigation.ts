@@ -5,6 +5,7 @@ export const navigation = [
       { title: 'Introduction', href: '/' },
       { title: 'Quick start', href: '/docs/quick-start' },
       { title: 'Configuration', href: '/docs/configuration' },
+      { title: 'Event queue', href: '/docs/event-queue' },
     ],
   },
   {
@@ -22,6 +23,7 @@ export const navigation = [
       { title: 'POST /api/analyze', href: '/docs/api-analyze' },
       { title: 'POST /api/analyze/stream', href: '/docs/api-analyze-stream' },
       { title: 'Schemas', href: '/docs/schemas' },
+      { title: 'Queue API', href: '/docs/api-queue' },
     ],
   },
   {

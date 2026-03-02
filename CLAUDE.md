@@ -32,12 +32,14 @@ swarmops/
 │   │   ├── schemas/
 │   │   │   └── events.py        # AnalyzeRequest/Response, AgentAnalysisResponse, ModeratorSynthesisResponse
 │   │   ├── api/
-│   │   │   └── conversations.py # POST /api/analyze (sync) + POST /api/analyze/stream (SSE)
+│   │   │   ├── conversations.py # POST /api/analyze (sync) + POST /api/analyze/stream (SSE)
+│   │   │   └── queue.py         # POST /api/queue (sync/stream) + GET /api/queue/scenarios
 │   │   ├── agents/
 │   │   │   ├── orchestrator.py  # StateGraph: fan-out 3 agents → moderator (compiled graph singleton)
 │   │   │   ├── state.py         # SwarmState(TypedDict) with Annotated[list, operator.add] reducer
 │   │   │   ├── schemas.py       # AgentAnalysis, ModeratorSynthesis, ActionItem (structured LLM output)
 │   │   │   ├── llm.py           # Cached ChatBedrockConverse with adaptive retry
+│   │   │   ├── scenarios.py     # 4 pre-built AnalyzeRequest objects for event queue
 │   │   │   ├── nodes/
 │   │   │   │   ├── prepare.py       # Context preparation stub (extension point for memory/RAG)
 │   │   │   │   ├── compliance.py    # AML/KYC/sanctions analysis
@@ -54,7 +56,8 @@ swarmops/
 │   │   ├── tasks/               # (future) ARQ background tasks
 │   │   └── ws/                  # (future) SSE streaming endpoints
 │   ├── tests/
-│   │   └── test_orchestrator.py # Graph topology + full run with mocked LLM + API endpoint tests
+│   │   ├── test_orchestrator.py # Graph topology + full run with mocked LLM + API endpoint tests
+│   │   └── test_queue.py        # Scenario registry + queue endpoint tests (11 tests)
 │   └── requests.http            # HTTP client file for manual API testing
 ├── frontend/
 │   └── src/
@@ -147,6 +150,7 @@ The project is scaffolded incrementally. Each step is self-contained:
 2. Basic conversation CRUD + single agent call (no fan-out yet)
 3. **LangGraph orchestrator with parallel agents** — DONE
 4. **SSE streaming** — DONE (bundled with step 3)
+4.5. **Event queue with pre-built scenarios** — DONE (submit scenarios by name via `/api/queue`)
 5. Action items + RM queue
 6. Client memory (read/write/approve)
 7. ARQ background tasks (knowledge extraction, archival, compaction)
@@ -154,18 +158,19 @@ The project is scaffolded incrementally. Each step is self-contained:
 9. Auth + multi-tenancy
 10. Infrastructure + deployment
 
-### What's Built (Steps 1, 3, 4)
+### What's Built (Steps 1, 3, 4, 4.5)
 
-- **FastAPI app** with CORS, health check, and analyze endpoints
+- **FastAPI app** with CORS, health check, analyze endpoints, and queue endpoints
 - **LangGraph orchestrator** — `START → prepare → [compliance | security | engineering] → moderator → END`
 - **3 domain agents** running in parallel via LangGraph fan-out, each with structured output (`AgentAnalysis`)
 - **Moderator node** synthesizing into `ModeratorSynthesis` with action items
 - **SSE streaming** via `graph.astream(stream_mode="updates")` — emits `start`, `agent_complete` (×3), `moderator_complete`, `done`
+- **Event queue** — 4 pre-built scenarios (wire_transfer, velocity_alert, security_alert, cash_deposit) with distinct risk profiles; queue endpoints (`/api/queue`) accept scenario names instead of full JSON payloads and delegate to the real LLM pipeline
 - **Adaptive retry** on Bedrock calls (handles throttling from parallel agent calls)
 - **Pydantic validators** to coerce LLM output quirks (bullet strings → lists)
 - **Docker setup** — multi-stage build, nginx reverse proxy with SSE support, supervisord
 - **Frontend UI** — fully styled conversation components (using mock data, not yet wired to API)
-- **Tests** — 6 passing (topology, mocked LLM full run, API endpoint)
+- **Tests** — 17 passing (topology, mocked LLM full run, API endpoint, scenarios, queue endpoints)
 
 ### What's NOT Built Yet
 
