@@ -8,9 +8,9 @@ Multi-agent AI commentary system for fintech operations. Business events (wire t
 
 | Layer | Technology |
 |---|---|
-| Backend | FastAPI, Python 3.12 |
+| Backend | FastAPI, Python 3.11 |
 | Agent Orchestration | LangGraph (StateGraph fan-out/fan-in) |
-| LLM | AWS Bedrock (Claude Sonnet) |
+| LLM | AWS Bedrock (Claude Haiku 4.5 default, configurable via `SWARM_BEDROCK_MODEL_ID`) |
 | Database | PostgreSQL + pgvector (relational, JSONB, vectors, full-text search) |
 | Cache + Pub/Sub | Redis |
 | Background Tasks | ARQ (async Redis-based task queue + cron) |
@@ -25,59 +25,85 @@ Multi-agent AI commentary system for fintech operations. Business events (wire t
 ```
 swarmops/
 ├── backend/
-│   └── app/
-│       ├── main.py              # FastAPI entrypoint
-│       ├── core/                # config, database, auth, redis, security
-│       ├── models/              # SQLAlchemy: conversation, message, client, action_item, memory, audit_log, knowledge
-│       ├── schemas/             # Pydantic request/response DTOs
-│       ├── api/                 # REST endpoints: conversations, action_items, clients, memory, auth, admin
-│       ├── services/            # Business logic layer
-│       ├── agents/
-│       │   ├── orchestrator.py  # StateGraph: fan-out 3 agents → moderator → memory + action items
-│       │   ├── state.py         # Shared TypedDict state
-│       │   ├── nodes/           # compliance.py, security.py, engineering.py, moderator.py, memory_update.py
-│       │   └── prompts/         # Markdown prompt templates (version controlled)
-│       ├── tasks/               # ARQ tasks: knowledge_extraction, memory_updates, archive, audit, notifications
-│       ├── worker.py            # ARQ worker settings + cron schedule
-│       └── ws/                  # SSE streaming endpoints
+│   ├── app/
+│   │   ├── main.py              # FastAPI entrypoint + CORS + router registration
+│   │   ├── core/
+│   │   │   └── config.py        # Settings(BaseSettings) — Bedrock region/model, CORS origins (env prefix: SWARM_)
+│   │   ├── schemas/
+│   │   │   └── events.py        # AnalyzeRequest/Response, AgentAnalysisResponse, ModeratorSynthesisResponse
+│   │   ├── api/
+│   │   │   └── conversations.py # POST /api/analyze (sync) + POST /api/analyze/stream (SSE)
+│   │   ├── agents/
+│   │   │   ├── orchestrator.py  # StateGraph: fan-out 3 agents → moderator (compiled graph singleton)
+│   │   │   ├── state.py         # SwarmState(TypedDict) with Annotated[list, operator.add] reducer
+│   │   │   ├── schemas.py       # AgentAnalysis, ModeratorSynthesis, ActionItem (structured LLM output)
+│   │   │   ├── llm.py           # Cached ChatBedrockConverse with adaptive retry
+│   │   │   ├── nodes/
+│   │   │   │   ├── prepare.py       # Context preparation stub (extension point for memory/RAG)
+│   │   │   │   ├── compliance.py    # AML/KYC/sanctions analysis
+│   │   │   │   ├── security.py      # Threat/fraud/auth analysis
+│   │   │   │   ├── engineering.py   # API/SDK/metadata analysis
+│   │   │   │   └── moderator.py     # Synthesis of all agent analyses
+│   │   │   └── prompts/             # Markdown prompt templates (version controlled)
+│   │   │       ├── compliance.md
+│   │   │       ├── security.md
+│   │   │       ├── engineering.md
+│   │   │       └── moderator.md
+│   │   ├── models/              # (future) SQLAlchemy models
+│   │   ├── services/            # (future) Business logic layer
+│   │   ├── tasks/               # (future) ARQ background tasks
+│   │   └── ws/                  # (future) SSE streaming endpoints
+│   ├── tests/
+│   │   └── test_orchestrator.py # Graph topology + full run with mocked LLM + API endpoint tests
+│   └── requests.http            # HTTP client file for manual API testing
 ├── frontend/
 │   └── src/
-│       ├── api/                 # React Query hooks + SSE client
-│       ├── pages/               # Dashboard, Queue, Conversation, ConversationHistory, ClientDetail
-│       ├── components/          # conversation/, queue/, memory/, shared/
-│       └── hooks/               # useSSE, useInfiniteScroll, useRoleGuard
-├── infra/                       # Terraform (ECS, RDS, ElastiCache, S3, ALB)
-├── scripts/                     # seed_data, create_partitions, migrations
-└── docker-compose.yml           # Local dev: api + worker + postgres(pgvector) + redis
+│       ├── types/index.ts       # TypeScript interfaces (AgentInfo, Message, ModeratorSummaryData, etc.)
+│       ├── data/mockData.ts     # Mock conversations for UI development
+│       ├── components/          # conversation/, sidebar/, memory/, shared/ — fully styled with Tailwind
+│       └── App.tsx              # Main app (uses mock data, not yet wired to backend)
+├── docker-compose.yml           # Local dev: app (nginx+uvicorn) + postgres(pgvector) + redis
+├── Dockerfile                   # Multi-stage: frontend build → nginx + uvicorn + supervisord
+├── nginx.conf                   # Reverse proxy: / → frontend, /api/ → backend, SSE-aware
+├── supervisord.conf             # Process manager for nginx + uvicorn
+├── infra/                       # (future) Terraform (ECS, RDS, ElastiCache, S3, ALB)
+└── scripts/                     # (future) seed_data, create_partitions, migrations
 ```
 
 ## Development Commands
 
 ```bash
-# Local environment
-docker-compose up                  # api + worker + postgres + redis
+# Docker (full stack — frontend + backend + postgres + redis)
+docker compose up --build -d       # build and start all services
+docker compose logs -f app         # follow app logs
+docker compose down                # stop everything
 
-# Backend
+# Switch LLM model via env var
+SWARM_BEDROCK_MODEL_ID=us.anthropic.claude-sonnet-4-20250514-v1:0 docker compose up -d
+
+# Backend (local, without Docker)
 cd backend
-uvicorn app.main:app --reload      # dev server
-alembic upgrade head               # run migrations
-alembic revision --autogenerate -m "description"  # create migration
-pytest                             # all tests
-pytest tests/test_foo.py::test_bar # single test
-ruff check . && ruff format .      # lint + format
+uv run uvicorn app.main:app --reload      # dev server on :8000
+uv run pytest tests/ -v                    # run tests
+uv run pytest tests/test_orchestrator.py   # single test file
+ruff check . && ruff format .              # lint + format
 
-# Frontend
+# Frontend (local, without Docker)
 cd frontend
-npm run dev                        # dev server
+npm run dev                        # dev server on :5173
 npm test                           # tests
 npm run build                      # production build
-
-# Worker
-cd backend
-arq app.worker.WorkerSettings      # start ARQ worker
 ```
 
-> Commands above are the intended conventions. Adjust as the project is scaffolded.
+### Ports
+
+| Service | Port | Notes |
+|---------|------|-------|
+| App (Docker) | 3000 | nginx: `/` → frontend, `/api/` → backend, `/health` → backend |
+| Backend (local) | 8000 | Direct uvicorn |
+| Frontend (local) | 5173 | Vite dev server |
+| PostgreSQL | 5432 | `swarmops/swarmops` |
+| Redis | 6379 | |
 
 ## Architecture — Key Concepts
 
@@ -117,15 +143,39 @@ RMs see an **action queue** sorted by risk severity, not real-time agent convers
 
 The project is scaffolded incrementally. Each step is self-contained:
 
-1. FastAPI skeleton + Postgres models + Alembic migrations
+1. ~~FastAPI skeleton + Postgres models + Alembic migrations~~ (scaffold done, DB models pending)
 2. Basic conversation CRUD + single agent call (no fan-out yet)
-3. LangGraph orchestrator with parallel agents
-4. SSE streaming
+3. **LangGraph orchestrator with parallel agents** — DONE
+4. **SSE streaming** — DONE (bundled with step 3)
 5. Action items + RM queue
 6. Client memory (read/write/approve)
 7. ARQ background tasks (knowledge extraction, archival, compaction)
-8. Frontend pages one at a time
+8. Frontend pages one at a time (UI scaffold done, API wiring pending)
 9. Auth + multi-tenancy
 10. Infrastructure + deployment
+
+### What's Built (Steps 1, 3, 4)
+
+- **FastAPI app** with CORS, health check, and analyze endpoints
+- **LangGraph orchestrator** — `START → prepare → [compliance | security | engineering] → moderator → END`
+- **3 domain agents** running in parallel via LangGraph fan-out, each with structured output (`AgentAnalysis`)
+- **Moderator node** synthesizing into `ModeratorSynthesis` with action items
+- **SSE streaming** via `graph.astream(stream_mode="updates")` — emits `start`, `agent_complete` (×3), `moderator_complete`, `done`
+- **Adaptive retry** on Bedrock calls (handles throttling from parallel agent calls)
+- **Pydantic validators** to coerce LLM output quirks (bullet strings → lists)
+- **Docker setup** — multi-stage build, nginx reverse proxy with SSE support, supervisord
+- **Frontend UI** — fully styled conversation components (using mock data, not yet wired to API)
+- **Tests** — 6 passing (topology, mocked LLM full run, API endpoint)
+
+### What's NOT Built Yet
+
+- Database models / Alembic migrations
+- Conversation CRUD / persistence
+- Action item queue with RM approve/reject/escalate
+- Client memory read/write/approve
+- ARQ background tasks
+- Frontend API integration (React Query hooks, SSE client)
+- Auth / multi-tenancy
+- Infrastructure / deployment
 
 **Ask which step to work on.** I'll scope it tightly and we'll build just that piece.

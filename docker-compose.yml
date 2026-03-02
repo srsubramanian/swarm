@@ -33,5 +33,10 @@ services:
     ports:
       - "6379:6379"
 
+  docs:
+    build: ./docs
+    ports:
+      - "3001:3000"
+
 volumes:
   pgdata:
