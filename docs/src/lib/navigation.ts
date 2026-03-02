@@ -12,6 +12,7 @@ export const navigation = [
     title: 'Architecture',
     links: [
       { title: 'System overview', href: '/docs/system-overview' },
+      { title: 'Architecture deep dive', href: '/docs/architecture-deep-dive' },
       { title: 'Agent orchestration', href: '/docs/agent-orchestration' },
       { title: 'Graph topology', href: '/docs/graph-topology' },
       { title: 'Conversation lifecycle', href: '/docs/conversation-lifecycle' },
