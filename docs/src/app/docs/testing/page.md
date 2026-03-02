@@ -2,7 +2,7 @@
 title: Testing
 ---
 
-SwarmOps uses pytest with mocked LLM calls to test graph topology, agent orchestration, and API endpoints without requiring AWS Bedrock access. {% .lead %}
+SwarmOps uses pytest with mocked LLM calls to test graph topology, agent orchestration, tool use, and API endpoints without requiring AWS Bedrock access. {% .lead %}
 
 ---
 
@@ -17,17 +17,19 @@ Or run a specific test file:
 
 ```shell
 uv run pytest tests/test_orchestrator.py -v
+uv run pytest tests/test_tool_agents.py -v
 ```
 
 ---
 
 ## Test structure
 
-Tests are spread across three files:
+Tests are spread across four files (69 tests total):
 
 - `backend/tests/test_orchestrator.py` — Graph topology, mocked LLM execution, API response (6 tests)
 - `backend/tests/test_queue.py` — Scenario registry and queue endpoint tests (11 tests)
 - `backend/tests/test_conversations.py` — Store, builder, history endpoints, camelCase serialization (18 tests)
+- `backend/tests/test_tool_agents.py` — Tool unit tests, tool loop tests, full graph integration with tools (34 tests)
 
 ### test_orchestrator.py
 
@@ -98,6 +100,82 @@ class TestAPIResponse:
 
 ---
 
+### test_tool_agents.py
+
+Tests the deep agent tool use system across three layers:
+
+**Layer 1 — Tool unit tests** (26 tests):
+
+Each tool is tested for known inputs and sensible defaults for unknown inputs:
+
+```python
+class TestComplianceTools:
+    def test_sanctions_cyprus_partial_match(self):
+        result = json.loads(search_sanctions_list.invoke({...}))
+        assert result["match_count"] == 1
+        assert result["jurisdiction_risk"] == "medium"
+
+    def test_regulatory_structuring_detection(self):
+        result = json.loads(check_regulatory_thresholds.invoke({...}))
+        assert result["triggered_rules"][0]["rule"] == "STRUCTURING_SUSPICION"
+
+class TestSecurityTools:
+    def test_ip_tor_exit_node(self):
+        result = json.loads(lookup_ip_reputation.invoke({...}))
+        assert result["is_tor"] is True
+        assert result["threat_score"] == 78
+
+    def test_geo_velocity_atlas_impossible_travel(self):
+        result = json.loads(check_geo_velocity.invoke({...}))
+        assert result["impossible_travel"] is True
+
+class TestEngineeringTools:
+    def test_sdk_eol_with_critical_vulns(self):
+        result = json.loads(check_sdk_version_status.invoke({...}))
+        assert result["status"] == "end_of_life"
+        assert len(result["known_cves"]) == 2
+```
+
+**Layer 2 — Tool loop tests** (3 tests):
+
+Tests the `run_agent_with_tools()` helper with mocked LLM:
+
+```python
+class TestToolLoop:
+    async def test_agent_with_tool_calls(self):
+        """Agent makes tool calls, then produces structured output."""
+    async def test_agent_no_tool_calls(self):
+        """Agent makes zero tool calls — loop exits immediately."""
+    async def test_agent_hallucinated_tool_name(self):
+        """Agent calls a tool that doesn't exist — gets error, self-corrects."""
+```
+
+**Layer 3 — Full graph integration** (1 test):
+
+Full graph with mocked tool-calling agents produces valid synthesis:
+
+```python
+class TestFullGraphWithTools:
+    async def test_full_graph_produces_valid_synthesis(self):
+        result = await graph.ainvoke(state)
+        assert len(result["analyses"]) == 3
+        assert result["moderator_synthesis"].status == "HOLD RECOMMENDED"
+        assert mock_llm.bind_tools.call_count == 3  # one per agent
+```
+
+**Tool registry tests** (4 tests):
+
+Validates the `TOOLS_BY_DOMAIN` registry:
+
+```python
+class TestToolRegistry:
+    def test_all_domains_registered(self): ...
+    def test_each_domain_has_three_tools(self): ...
+    def test_tools_have_names(self): ...
+```
+
+---
+
 ### test_conversations.py
 
 Tests the in-memory store, conversation builder, and history endpoints. Uses an `autouse` fixture to clear the store between tests.
@@ -142,32 +220,45 @@ class TestConversationEndpoints:
 
 ## Mocking strategy
 
-The tests mock the LLM at the agent node level, routing responses based on the system prompt header:
+The tests mock the LLM at two patch points:
+
+1. **`app.agents.tool_loop.get_llm`** — Used by all three domain agents (they delegate to `run_agent_with_tools()` which imports `get_llm`)
+2. **`app.agents.nodes.moderator.get_llm`** — Used by the moderator (which still calls `get_llm` directly)
+
+The mock LLM supports both `bind_tools()` and `with_structured_output()`:
 
 ```python
-async def mock_ainvoke(messages):
-    system_content = messages[0].content
-    if system_content.startswith("# Moderator"):
-        return _mock_moderator_synthesis()
-    elif system_content.startswith("# Compliance"):
-        return _mock_agent_analysis("compliance")
-    elif system_content.startswith("# Security"):
-        return _mock_agent_analysis("security")
-    elif system_content.startswith("# Engineering"):
-        return _mock_agent_analysis("engineering")
+def _create_mock_llm():
+    async def mock_structured_ainvoke(messages):
+        system_content = messages[0].content
+        if system_content.startswith("# Moderator"):
+            return _mock_moderator_synthesis()
+        elif system_content.startswith("# Compliance"):
+            return _mock_agent_analysis("compliance")
+        # ... security, engineering ...
+
+    mock_structured = AsyncMock()
+    mock_structured.ainvoke = mock_structured_ainvoke
+
+    # Tool-bound LLM returns AIMessage with no tool_calls (loop exits immediately)
+    mock_tool_bound = AsyncMock()
+    mock_tool_bound.ainvoke = AsyncMock(return_value=AIMessage(content="Analysis complete."))
+
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value = mock_structured
+    mock_llm.bind_tools.return_value = mock_tool_bound
+    return mock_llm
 ```
 
-The mock is patched into each agent node:
+The mock is patched at two locations (down from four before tool use):
 
 ```python
-with patch("app.agents.nodes.compliance.get_llm", return_value=mock_llm), \
-     patch("app.agents.nodes.security.get_llm", return_value=mock_llm), \
-     patch("app.agents.nodes.engineering.get_llm", return_value=mock_llm), \
+with patch("app.agents.tool_loop.get_llm", return_value=mock_llm), \
      patch("app.agents.nodes.moderator.get_llm", return_value=mock_llm):
     result = await graph.ainvoke(_sample_input())
 ```
 
-This approach tests the full graph topology and state flow without making actual LLM calls.
+The tool-bound mock returns an `AIMessage` with no `tool_calls`, so the tool loop exits immediately in tests. This tests the full graph topology and state flow without making actual LLM or tool calls.
 
 ---
 
@@ -187,7 +278,7 @@ class TestScenarios:
     def test_cash_deposit_has_expected_data(self): ...
 ```
 
-**TestQueueEndpoints** — API integration tests using the same mocked-LLM pattern as `test_orchestrator.py`:
+**TestQueueEndpoints** — API integration tests using the same mocked-LLM pattern:
 
 ```python
 class TestQueueEndpoints:
@@ -197,8 +288,6 @@ class TestQueueEndpoints:
     async def test_queue_stream_unknown_scenario_returns_404(self): ...
     async def test_queue_delegates_to_analyze(self): ...
 ```
-
-Queue endpoint tests that invoke the graph use the same `patch("app.agents.nodes.*.get_llm")` pattern to mock the LLM at the node level.
 
 ---
 

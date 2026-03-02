@@ -2,7 +2,7 @@
 title: Engineering agent
 ---
 
-The Engineering Agent is a senior fintech platform engineer that analyzes events for technical integrity, API correctness, SDK health, and system behavior patterns. {% .lead %}
+The Engineering Agent is a senior fintech platform engineer that analyzes events for technical integrity, API correctness, SDK health, and system behavior patterns. It uses investigative tools to verify technical details before forming its assessment. {% .lead %}
 
 ---
 
@@ -13,6 +13,20 @@ The Engineering Agent is a senior fintech platform engineer that analyzes events
 - **Metadata Validation** — Timestamps, reference IDs, correlation chains, data consistency
 - **Rate Limiting & Quotas** — Throughput patterns, burst detection, quota consumption
 - **System Behavior** — Latency anomalies, error rate spikes, cascade failure indicators
+
+---
+
+## Available tools
+
+The engineering agent has access to three investigative tools:
+
+| Tool | Purpose | Example data |
+|------|---------|-------------|
+| `check_sdk_version_status(version)` | SDK lifecycle and CVE check | Status (current/deprecated/EOL), known CVEs, upgrade urgency |
+| `get_api_rate_limit_status(client_id)` | Rate limit monitoring | Quota consumption, burst detection, throttling status |
+| `validate_transaction_metadata(reference_id)` | Reference ID validation | Format check, duplicate detection, correlation chain |
+
+Tools return simulated mock data keyed on the 4 built-in scenarios. For example, `check_sdk_version_status("2.9.1")` reports end-of-life status with 2 unpatched CVEs (including a critical RCE), while `get_api_rate_limit_status("Quantum Dynamics")` detects a burst pattern classified as "within_limits_but_bursty".
 
 ---
 
@@ -32,19 +46,18 @@ For every event, the engineering agent assesses:
 
 **File:** `backend/app/agents/nodes/engineering.py`
 
-Same implementation pattern as the other agent nodes:
-
 ```python
 async def engineering_agent(state: SwarmState) -> dict:
-    llm = get_llm()
-    structured_llm = llm.with_structured_output(AgentAnalysis)
-    result = await structured_llm.ainvoke([
-        SystemMessage(content=_load_prompt()),
-        HumanMessage(content=_format_event(state)),
-    ])
-    result.agent_role = "engineering"
-    return {"analyses": [result]}
+    return await run_agent_with_tools(
+        state=state,
+        agent_role="engineering",
+        system_prompt=_load_prompt(),
+        event_message=_format_event(state),
+        tools=ENGINEERING_TOOLS,
+    )
 ```
+
+Same pattern as all agent nodes — delegates to the shared `run_agent_with_tools()` helper.
 
 ---
 
@@ -68,8 +81,8 @@ For a velocity alert of 47 transactions in 3 minutes:
 | **position** | CLEAR — Consistent with known batch ACH pattern |
 | **risk_level** | low |
 | **confidence** | high |
-| **key_findings** | Client is a payroll processor, 47 txns within normal 40-60 range, SDK v3.0 is current |
-| **recommended_action** | Proceed — matches established client pattern |
+| **key_findings** | Client is a payroll processor, 47 txns within normal 40-60 range, SDK v3.0 deprecated with known CVE, burst detected but within limits |
+| **recommended_action** | Proceed — matches established pattern, but flag SDK upgrade needed |
 
 ---
 

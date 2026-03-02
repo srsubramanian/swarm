@@ -143,44 +143,106 @@ Caller sets:                       Agents append:              Moderator sets:
 
 ---
 
+## Deep agents with tool use
+
+Each domain agent is a **deep agent** — instead of a single LLM call, it runs an internal tool-calling loop to gather evidence before forming its assessment. The LangGraph topology is unchanged; the tool loop is entirely internal to each node function.
+
+### The two-phase approach
+
+Each agent uses a shared `run_agent_with_tools()` helper that runs two LLM phases:
+
+**Phase 1 — Evidence gathering** (tool-calling loop):
+```python
+llm_with_tools = llm.bind_tools(tools)  # e.g., sanctions lookup, IP reputation
+# Loop up to max_iterations:
+#   LLM decides which tools to call → execute tools → append results → repeat
+#   Exit when LLM returns a message with no tool_calls
+```
+
+**Phase 2 — Structured extraction**:
+```python
+structured_llm = llm.with_structured_output(AgentAnalysis)
+# Final call with all gathered evidence → validated Pydantic output
+```
+
+Why two phases? `bind_tools()` adds tool definitions to the LLM request so it can call tools. `with_structured_output()` sets up JSON schema enforcement for the final result. They serve different purposes and can't be combined — the tool loop phase needs tool calling, the extraction phase needs structured output.
+
+### Tool-calling loop internals
+
+```python
+async def run_agent_with_tools(
+    state, agent_role, system_prompt, event_message, tools, max_iterations=5
+) -> dict:
+    llm = get_llm()
+    tool_map = {t.name: t for t in tools}
+    llm_with_tools = llm.bind_tools(tools)
+
+    messages = [SystemMessage(content=system_prompt), HumanMessage(content=event_message)]
+
+    for iteration in range(max_iterations):
+        response = await llm_with_tools.ainvoke(messages)
+        messages.append(response)
+
+        if not response.tool_calls:
+            break  # LLM has gathered enough evidence
+
+        for tool_call in response.tool_calls:
+            result = await tool_map[tool_call["name"]].ainvoke(tool_call["args"])
+            messages.append(ToolMessage(content=result, tool_call_id=tool_call["id"]))
+
+    # Phase 2: extract structured output with all evidence in context
+    messages.append(HumanMessage(content="Provide your final structured assessment."))
+    structured_llm = llm.with_structured_output(AgentAnalysis)
+    analysis = await structured_llm.ainvoke(messages)
+    analysis.agent_role = agent_role
+    return {"analyses": [analysis]}
+```
+
+Error handling: unknown tool names get an error message (the LLM self-corrects on the next iteration), and tool exceptions are caught and returned as error strings.
+
+### Domain tools (9 total)
+
+Each agent has 3 domain-specific tools. All tools use the `@tool` decorator from `langchain_core.tools`, accept snake_case parameters, and return JSON strings. Current implementations return **simulated mock data** keyed on the 4 built-in scenarios — the interfaces are designed for easy swap to real APIs later.
+
+| Domain | Tool | Purpose |
+|--------|------|---------|
+| **Compliance** | `search_sanctions_list(name, country)` | OFAC/EU/UN sanctions lookup with match scores and FATF status |
+| | `get_client_transaction_history(client_name)` | Recent patterns, account age, risk rating, flags |
+| | `check_regulatory_thresholds(event_type, amount, jurisdiction)` | CTR/SAR thresholds, structuring detection, FATF grey/black list |
+| **Security** | `lookup_ip_reputation(ip_address)` | Threat score, ISP, VPN/proxy/Tor detection, abuse history |
+| | `check_geo_velocity(client_name, current_location)` | Impossible travel detection with distance/time analysis |
+| | `get_device_fingerprint_history(client_name)` | Known/new devices, trust levels, risk indicators |
+| **Engineering** | `check_sdk_version_status(version)` | SDK lifecycle status, known CVEs, upgrade urgency |
+| | `get_api_rate_limit_status(client_id)` | Rate limit consumption, burst detection, throttling status |
+| | `validate_transaction_metadata(reference_id)` | Format validation, duplicate check, correlation chain |
+
+Tools are registered in `agents/tools/__init__.py` via a `TOOLS_BY_DOMAIN` dictionary.
+
+---
+
 ## Agent node anatomy
 
-Every agent node follows the exact same pattern. Here's the compliance agent as a representative example:
+Every agent node delegates to the shared `run_agent_with_tools()` helper. Here's the compliance agent:
 
 ```python
 async def compliance_agent(state: SwarmState) -> dict:
-    # 1. Get the cached LLM instance
-    llm = get_llm()
-
-    # 2. Bind structured output schema
-    structured_llm = llm.with_structured_output(AgentAnalysis)
-
-    # 3. Invoke with system prompt + formatted event
-    result = await structured_llm.ainvoke([
-        SystemMessage(content=_load_prompt()),    # from prompts/compliance.md
-        HumanMessage(content=_format_event(state)), # event data as markdown
-    ])
-
-    # 4. Tag the role (LLM doesn't reliably self-identify)
-    result.agent_role = "compliance"
-
-    # 5. Return partial state update (reducer handles merging)
-    return {"analyses": [result]}
+    return await run_agent_with_tools(
+        state=state,
+        agent_role="compliance",
+        system_prompt=_load_prompt(),       # from prompts/compliance.md
+        event_message=_format_event(state), # event data as markdown
+        tools=COMPLIANCE_TOOLS,             # 3 compliance-specific tools
+    )
 ```
 
-### Step-by-step breakdown
+### How the pipeline works for each agent
 
-**Step 1 — Cached LLM**: `get_llm()` returns a singleton `ChatBedrockConverse` instance, configured from environment variables and cached via `@lru_cache`. All agents share the same LLM instance.
-
-**Step 2 — Structured output**: `.with_structured_output(AgentAnalysis)` wraps the LLM call so the response is automatically parsed into a Pydantic model. The LLM receives the schema as a tool definition and returns structured JSON.
-
-**Step 3 — Two-message pattern**: Every agent sends exactly two messages:
-- `SystemMessage`: The domain prompt loaded from a markdown file (`prompts/compliance.md`)
-- `HumanMessage`: The event data formatted as markdown with JSON code blocks
-
-**Step 4 — Role tagging**: The `agent_role` field is set explicitly in code rather than trusting the LLM to self-identify correctly. This ensures downstream code can always rely on the role value.
-
-**Step 5 — Partial state update**: The node returns `{"analyses": [result]}` — a single-element list. The `operator.add` reducer on the `analyses` field handles merging this with results from other agents.
+1. **Load prompt** — `_load_prompt()` reads the domain prompt from disk (`prompts/compliance.md`)
+2. **Format event** — `_format_event()` converts graph state into a structured markdown message
+3. **Tool loop** — The LLM calls domain tools to gather evidence (sanctions checks, IP lookups, etc.)
+4. **Structured extraction** — A final LLM call with all evidence produces a validated `AgentAnalysis`
+5. **Role tagging** — `agent_role` is set explicitly in code (not trusting LLM self-identification)
+6. **State update** — Returns `{"analyses": [result]}` for the `operator.add` reducer
 
 ### Why all agents are identical in structure
 
@@ -188,14 +250,9 @@ The three agents (`compliance_agent`, `security_agent`, `engineering_agent`) hav
 
 1. Which prompt file they load (`compliance.md` vs `security.md` vs `engineering.md`)
 2. The `agent_role` string they set
+3. Which tool list they pass (`COMPLIANCE_TOOLS` vs `SECURITY_TOOLS` vs `ENGINEERING_TOOLS`)
 
-This is intentional. The domain expertise lives entirely in the **prompt templates**, not in code. To add a fourth agent (e.g., a Legal agent), you would:
-
-1. Write a `prompts/legal.md` prompt file
-2. Copy any agent node file and change two strings
-3. Add the node and edges in `orchestrator.py`
-
-No framework changes needed.
+Domain expertise lives in the **prompt templates** and **tool definitions**, not in code.
 
 ---
 
@@ -555,9 +612,9 @@ Here's what happens when you submit a wire transfer scenario, from HTTP request 
 5.    +-> prepare_context()     -> {} (passthrough)
       |
 6.    +-> compliance_agent()    -+
-      +-> security_agent()      -+ (parallel, ~2-5s each)
+      +-> security_agent()      -+ (parallel, each runs tool loop)
       +-> engineering_agent()   -+
-      |         |
+      |         |  (tools: sanctions, IP reputation, SDK checks, etc.)
       |         v operator.add merges analyses
       |
 7.    v moderator_node()        -> ModeratorSynthesis
@@ -584,12 +641,13 @@ A typical request takes **5-15 seconds** end-to-end, depending on LLM latency:
 |---|---|
 | Request parsing + scenario lookup | < 1ms |
 | Prepare node | < 1ms |
-| Agent LLM calls (3 parallel) | 3-10s |
+| Agent tool loops (3 parallel, 1-3 tool calls each) | 5-15s |
+| Agent structured extraction (3 parallel) | 2-5s |
 | Moderator LLM call | 2-5s |
 | Conversation building + persistence | < 1ms |
 | Response serialization | < 1ms |
 
-The agents run in parallel, so the total agent time is the **slowest** agent, not the sum of all three.
+The agents run in parallel, so the total agent time is the **slowest** agent, not the sum of all three. Each agent typically makes 1-3 tool calls before extraction, adding 2-5 LLM round trips per agent.
 
 ---
 
@@ -640,25 +698,49 @@ You are a senior legal counsel specializing in financial regulations...
 ## Your Domain
 ...
 
+## Available Tools
+- **search_case_law(query, jurisdiction)** — Search relevant case law...
+- **check_contract_terms(client_name)** — Retrieve contract terms...
+
 ## Analysis Framework
 ...
 ```
 
-**2. Create the node** — `backend/app/agents/nodes/legal.py`
+**2. Create the tools** — `backend/app/agents/tools/legal_tools.py`
+
+```python
+from langchain_core.tools import tool
+
+@tool
+def search_case_law(query: str, jurisdiction: str) -> str:
+    """Search relevant case law for a legal question."""
+    # Mock implementation — swap for real API later
+    return json.dumps({"results": [...]})
+
+LEGAL_TOOLS = [search_case_law, ...]
+```
+
+Register in `agents/tools/__init__.py`:
+
+```python
+from app.agents.tools.legal_tools import LEGAL_TOOLS
+TOOLS_BY_DOMAIN["legal"] = LEGAL_TOOLS
+```
+
+**3. Create the node** — `backend/app/agents/nodes/legal.py`
 
 ```python
 async def legal_agent(state: SwarmState) -> dict:
-    llm = get_llm()
-    structured_llm = llm.with_structured_output(AgentAnalysis)
-    result = await structured_llm.ainvoke([
-        SystemMessage(content=_load_prompt()),
-        HumanMessage(content=_format_event(state)),
-    ])
-    result.agent_role = "legal"
-    return {"analyses": [result]}
+    return await run_agent_with_tools(
+        state=state,
+        agent_role="legal",
+        system_prompt=_load_prompt(),
+        event_message=_format_event(state),
+        tools=LEGAL_TOOLS,
+    )
 ```
 
-**3. Wire it into the graph** — `backend/app/agents/orchestrator.py`
+**4. Wire it into the graph** — `backend/app/agents/orchestrator.py`
 
 ```python
 builder.add_node("legal", legal_agent)
@@ -678,15 +760,20 @@ That's it. The moderator automatically receives the legal analysis because it re
 | `backend/app/agents/state.py` | `SwarmState` TypedDict with reducer |
 | `backend/app/agents/schemas.py` | `AgentAnalysis`, `ModeratorSynthesis`, `ActionItem` |
 | `backend/app/agents/llm.py` | Cached `ChatBedrockConverse` with adaptive retry |
+| `backend/app/agents/tool_loop.py` | Shared `run_agent_with_tools()` — two-phase tool loop + structured extraction |
 | `backend/app/agents/scenarios.py` | 4 pre-built `AnalyzeRequest` objects |
+| `backend/app/agents/tools/__init__.py` | `TOOLS_BY_DOMAIN` registry |
+| `backend/app/agents/tools/compliance_tools.py` | Sanctions, transaction history, regulatory thresholds |
+| `backend/app/agents/tools/security_tools.py` | IP reputation, geo-velocity, device fingerprints |
+| `backend/app/agents/tools/engineering_tools.py` | SDK versions, rate limits, metadata validation |
 | `backend/app/agents/nodes/prepare.py` | Context preparation (passthrough stub) |
-| `backend/app/agents/nodes/compliance.py` | Compliance agent node |
-| `backend/app/agents/nodes/security.py` | Security agent node |
-| `backend/app/agents/nodes/engineering.py` | Engineering agent node |
-| `backend/app/agents/nodes/moderator.py` | Moderator synthesis node |
-| `backend/app/agents/prompts/compliance.md` | Compliance domain prompt |
-| `backend/app/agents/prompts/security.md` | Security domain prompt |
-| `backend/app/agents/prompts/engineering.md` | Engineering domain prompt |
+| `backend/app/agents/nodes/compliance.py` | Compliance deep agent node (delegates to tool loop) |
+| `backend/app/agents/nodes/security.py` | Security deep agent node (delegates to tool loop) |
+| `backend/app/agents/nodes/engineering.py` | Engineering deep agent node (delegates to tool loop) |
+| `backend/app/agents/nodes/moderator.py` | Moderator synthesis node (single structured output call) |
+| `backend/app/agents/prompts/compliance.md` | Compliance domain prompt (includes Available Tools) |
+| `backend/app/agents/prompts/security.md` | Security domain prompt (includes Available Tools) |
+| `backend/app/agents/prompts/engineering.md` | Engineering domain prompt (includes Available Tools) |
 | `backend/app/agents/prompts/moderator.md` | Moderator synthesis prompt |
 | `backend/app/api/conversations.py` | `/api/analyze` and `/api/analyze/stream` |
 | `backend/app/api/queue.py` | `/api/queue` (sync + stream) |

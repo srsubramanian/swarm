@@ -68,12 +68,14 @@ SwarmOps is under active development. What's built:
 
 - FastAPI app with CORS, health check, analyze endpoints, queue endpoints, and conversation history endpoints
 - LangGraph orchestrator with parallel fan-out/fan-in
-- Three domain agents with structured Pydantic output
-- Moderator synthesis with action items
+- Three **deep agents** with internal tool-calling loops — each agent calls domain-specific tools (sanctions lookup, IP reputation, SDK version check, etc.) to gather evidence before producing structured output
+- 9 domain-specific tools (3 per agent) returning simulated mock data keyed on 4 built-in scenarios
+- Moderator synthesis with action items (single structured output call)
 - SSE streaming for real-time agent updates
 - Event queue with 4 pre-built scenarios — submit by name, results auto-persist
 - Conversation history — in-memory store with list/get/clear endpoints; response shape matches frontend TypeScript types (camelCase JSON)
 - Docker setup with nginx reverse proxy
 - Frontend UI scaffold with Tailwind CSS
+- 69 passing tests covering tools, tool loop, graph topology, API endpoints, and data flow
 
 See the [development guide](/docs/development) for the full build roadmap, the [event queue](/docs/event-queue) to quickly trigger agent analysis, or the [Conversations API](/docs/api-conversations) to review persisted results.

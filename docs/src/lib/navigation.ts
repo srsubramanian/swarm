@@ -35,6 +35,7 @@ export const navigation = [
       { title: 'Security agent', href: '/docs/agent-security' },
       { title: 'Engineering agent', href: '/docs/agent-engineering' },
       { title: 'Moderator', href: '/docs/moderator' },
+      { title: 'Tool use', href: '/docs/tool-use' },
       { title: 'Prompt templates', href: '/docs/prompt-templates' },
     ],
   },

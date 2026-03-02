@@ -2,7 +2,7 @@
 title: Compliance agent
 ---
 
-The Compliance Agent is a senior AML/KYC analyst that evaluates business events for regulatory risk, sanctions exposure, and suspicious transaction patterns. {% .lead %}
+The Compliance Agent is a senior AML/KYC analyst that evaluates business events for regulatory risk, sanctions exposure, and suspicious transaction patterns. It uses investigative tools to gather evidence before forming its assessment. {% .lead %}
 
 ---
 
@@ -13,6 +13,20 @@ The Compliance Agent is a senior AML/KYC analyst that evaluates business events 
 - **Sanctions** — OFAC, EU, UN sanctions list matches, secondary sanctions exposure
 - **Regulatory Reporting** — SAR/STR filing thresholds, CTR requirements, cross-border reporting
 - **Transaction Typologies** — Trade-based laundering, mirror trades, rapid movement of funds
+
+---
+
+## Available tools
+
+The compliance agent has access to three investigative tools:
+
+| Tool | Purpose | Example data |
+|------|---------|-------------|
+| `search_sanctions_list(name, country)` | OFAC/EU/UN sanctions lookup | Returns match scores (0-1), jurisdiction risk level, FATF status |
+| `get_client_transaction_history(client_name)` | Recent transaction patterns | Account age, risk rating, flags like `deposits_near_ctr_threshold` |
+| `check_regulatory_thresholds(event_type, amount, jurisdiction)` | Regulatory rule checking | CTR thresholds, structuring detection, FATF grey/black list status |
+
+Tools return simulated mock data keyed on the 4 built-in scenarios. For example, `search_sanctions_list("Meridian Holdings", "CY")` returns a partial match (score 0.72) from the EU Consolidated list with "monitored" FATF status, while `check_regulatory_thresholds("cash_deposit", 9800, "US")` triggers the `STRUCTURING_SUSPICION` rule.
 
 ---
 
@@ -34,23 +48,22 @@ For every event, the compliance agent assesses:
 
 ```python
 async def compliance_agent(state: SwarmState) -> dict:
-    llm = get_llm()
-    structured_llm = llm.with_structured_output(AgentAnalysis)
-    result = await structured_llm.ainvoke([
-        SystemMessage(content=_load_prompt()),
-        HumanMessage(content=_format_event(state)),
-    ])
-    result.agent_role = "compliance"
-    return {"analyses": [result]}
+    return await run_agent_with_tools(
+        state=state,
+        agent_role="compliance",
+        system_prompt=_load_prompt(),
+        event_message=_format_event(state),
+        tools=COMPLIANCE_TOOLS,
+    )
 ```
 
-The agent:
+The agent delegates to the shared `run_agent_with_tools()` helper which:
 
 1. Loads the compliance prompt template from `agents/prompts/compliance.md`
 2. Formats the event data as a structured markdown message
-3. Calls the LLM with `AgentAnalysis` structured output
-4. Sets `agent_role` to `"compliance"`
-5. Returns the analysis wrapped in a list for the state reducer
+3. Runs a **tool-calling loop** — the LLM calls compliance tools to gather evidence (sanctions checks, transaction history, regulatory thresholds)
+4. Makes a final structured output call to extract the `AgentAnalysis`
+5. Sets `agent_role` to `"compliance"` and returns the result for the state reducer
 
 ---
 

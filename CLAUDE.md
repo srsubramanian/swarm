@@ -41,17 +41,23 @@ swarmops/
 │   │   │   ├── state.py         # SwarmState(TypedDict) with Annotated[list, operator.add] reducer
 │   │   │   ├── schemas.py       # AgentAnalysis, ModeratorSynthesis, ActionItem (structured LLM output)
 │   │   │   ├── llm.py           # Cached ChatBedrockConverse with adaptive retry
+│   │   │   ├── tool_loop.py     # Shared run_agent_with_tools() — two-phase helper (tool loop + structured extraction)
 │   │   │   ├── scenarios.py     # 4 pre-built AnalyzeRequest objects for event queue
+│   │   │   ├── tools/               # Domain-specific mock tools for deep agent analysis
+│   │   │   │   ├── __init__.py          # TOOLS_BY_DOMAIN registry
+│   │   │   │   ├── compliance_tools.py  # search_sanctions_list, get_client_transaction_history, check_regulatory_thresholds
+│   │   │   │   ├── security_tools.py    # lookup_ip_reputation, check_geo_velocity, get_device_fingerprint_history
+│   │   │   │   └── engineering_tools.py # check_sdk_version_status, get_api_rate_limit_status, validate_transaction_metadata
 │   │   │   ├── nodes/
 │   │   │   │   ├── prepare.py       # Context preparation stub (extension point for memory/RAG)
-│   │   │   │   ├── compliance.py    # AML/KYC/sanctions analysis
-│   │   │   │   ├── security.py      # Threat/fraud/auth analysis
-│   │   │   │   ├── engineering.py   # API/SDK/metadata analysis
-│   │   │   │   └── moderator.py     # Synthesis of all agent analyses
+│   │   │   │   ├── compliance.py    # AML/KYC/sanctions analysis (deep agent with tool use)
+│   │   │   │   ├── security.py      # Threat/fraud/auth analysis (deep agent with tool use)
+│   │   │   │   ├── engineering.py   # API/SDK/metadata analysis (deep agent with tool use)
+│   │   │   │   └── moderator.py     # Synthesis of all agent analyses (single structured output call)
 │   │   │   └── prompts/             # Markdown prompt templates (version controlled)
-│   │   │       ├── compliance.md
-│   │   │       ├── security.md
-│   │   │       ├── engineering.md
+│   │   │       ├── compliance.md    # Includes Available Tools section
+│   │   │       ├── security.md      # Includes Available Tools section
+│   │   │       ├── engineering.md   # Includes Available Tools section
 │   │   │       └── moderator.md
 │   │   ├── models/              # (future) SQLAlchemy models
 │   │   ├── services/
@@ -62,7 +68,8 @@ swarmops/
 │   ├── tests/
 │   │   ├── test_orchestrator.py   # Graph topology + full run with mocked LLM + API endpoint tests
 │   │   ├── test_queue.py          # Scenario registry + queue endpoint tests
-│   │   └── test_conversations.py  # Store, builder, history endpoint, and camelCase serialization tests
+│   │   ├── test_conversations.py  # Store, builder, history endpoint, and camelCase serialization tests
+│   │   └── test_tool_agents.py    # Tool unit tests + tool loop tests + full graph integration with tools
 │   └── requests.http            # HTTP client file for manual API testing
 ├── frontend/
 │   └── src/
@@ -119,12 +126,13 @@ npm run build                      # production build
 
 The orchestrator is a `StateGraph` with fan-out/fan-in topology:
 
-1. **Fan-out**: Three agent nodes run in parallel — Compliance (AML/KYC/regulatory), Security (threats/vulnerabilities), Engineering (technical feasibility)
-2. **Cross-reference**: Agents can reference each other's analysis — Security pushes back on Engineering, Compliance cites regulations, they converge or disagree
-3. **Moderator**: Synthesizes all agent outputs into a structured summary — consensus, dissent, risk level, next steps
-4. **Side-effects**: Moderator output triggers action item creation and memory update proposals
+1. **Fan-out**: Three **deep agent** nodes run in parallel — Compliance (AML/KYC/regulatory), Security (threats/vulnerabilities), Engineering (technical feasibility). Each agent has an internal tool-calling loop to gather evidence before forming its assessment.
+2. **Tool use**: Each agent has 3 domain-specific tools (9 total). The agent calls tools, receives results, iterates until it has enough evidence, then a final structured-output call extracts the `AgentAnalysis`. The LangGraph topology is unchanged — tool loops are entirely internal to each node.
+3. **Cross-reference**: Agents can reference each other's analysis — Security pushes back on Engineering, Compliance cites regulations, they converge or disagree
+4. **Moderator**: Synthesizes all agent outputs into a structured summary — consensus, dissent, risk level, next steps (single LLM call, no tool use)
+5. **Side-effects**: Moderator output triggers action item creation and memory update proposals
 
-Shared state is a `TypedDict` passed through the graph. Prompt templates live in `agents/prompts/` as version-controlled markdown files.
+Shared state is a `TypedDict` passed through the graph. Prompt templates live in `agents/prompts/` as version-controlled markdown files. Tool definitions live in `agents/tools/` with a `TOOLS_BY_DOMAIN` registry.
 
 ### Client Memory
 
@@ -157,6 +165,7 @@ The project is scaffolded incrementally. Each step is self-contained:
 4. **SSE streaming** — DONE (bundled with step 3)
 4.5. **Event queue with pre-built scenarios** — DONE (submit scenarios by name via `/api/queue`)
 4.6. **Conversation history (in-memory)** — DONE (queue submissions auto-persist, history endpoints for list/get/clear)
+4.7. **Deep agents with tool use** — DONE (agents call domain-specific tools to gather evidence before forming assessments)
 5. Action items + RM queue
 6. Client memory (read/write/approve)
 7. ARQ background tasks (knowledge extraction, archival, compaction)
@@ -164,12 +173,17 @@ The project is scaffolded incrementally. Each step is self-contained:
 9. Auth + multi-tenancy
 10. Infrastructure + deployment
 
-### What's Built (Steps 1, 3, 4, 4.5, 4.6)
+### What's Built (Steps 1, 3, 4, 4.5, 4.6, 4.7)
 
 - **FastAPI app** with CORS, health check, analyze endpoints, queue endpoints, and history endpoints
 - **LangGraph orchestrator** — `START → prepare → [compliance | security | engineering] → moderator → END`
-- **3 domain agents** running in parallel via LangGraph fan-out, each with structured output (`AgentAnalysis`)
-- **Moderator node** synthesizing into `ModeratorSynthesis` with action items
+- **3 deep agents** running in parallel via LangGraph fan-out, each with an **internal tool-calling loop** that gathers evidence before producing structured output (`AgentAnalysis`)
+  - **Compliance tools**: `search_sanctions_list`, `get_client_transaction_history`, `check_regulatory_thresholds`
+  - **Security tools**: `lookup_ip_reputation`, `check_geo_velocity`, `get_device_fingerprint_history`
+  - **Engineering tools**: `check_sdk_version_status`, `get_api_rate_limit_status`, `validate_transaction_metadata`
+  - Tools return **simulated mock data** keyed on the 4 built-in scenarios — clean interfaces for swapping in real implementations later
+  - Shared `run_agent_with_tools()` helper uses a **two-phase approach**: Phase 1 `bind_tools()` for evidence gathering (up to 5 iterations), Phase 2 `with_structured_output()` for structured extraction
+- **Moderator node** synthesizing into `ModeratorSynthesis` with action items (single structured output call — no tool use)
 - **SSE streaming** via `graph.astream(stream_mode="updates")` — emits `start`, `agent_complete` (×3), `moderator_complete`, `done`
 - **Event queue** — 4 pre-built scenarios (wire_transfer, velocity_alert, security_alert, cash_deposit) with distinct risk profiles; queue endpoints (`/api/queue`) accept scenario names, run the full LLM pipeline, and **persist results** as `ConversationRecord`
 - **Conversation history** — In-memory store (`InMemoryConversationStore`) auto-saves queue submissions; history endpoints (`GET /api/conversations`, `GET /api/conversations/{id}`, `DELETE /api/conversations`) for listing, retrieving, and clearing; response shape matches frontend `Conversation` type (camelCase JSON via Pydantic aliases); `/api/analyze` endpoints remain stateless
@@ -177,7 +191,7 @@ The project is scaffolded incrementally. Each step is self-contained:
 - **Pydantic validators** to coerce LLM output quirks (bullet strings → lists)
 - **Docker setup** — multi-stage build, nginx reverse proxy with SSE support, supervisord
 - **Frontend UI** — fully styled conversation components (using mock data, not yet wired to API)
-- **Tests** — 35 passing (topology, mocked LLM full run, API endpoint, scenarios, queue endpoints, store, builder, history endpoints, camelCase serialization)
+- **Tests** — 69 passing (topology, mocked LLM full run, API endpoints, scenarios, queue endpoints, store, builder, history endpoints, camelCase serialization, tool unit tests, tool loop, full graph integration with tools)
 
 ### What's NOT Built Yet
 
