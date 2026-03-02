@@ -26,7 +26,7 @@ _AGENT_NAMES = {
 }
 
 
-def _analysis_to_response(a: AgentAnalysis) -> AgentAnalysisResponse:
+def analysis_to_response(a: AgentAnalysis) -> AgentAnalysisResponse:
     return AgentAnalysisResponse(
         agent_role=a.agent_role,
         agent_name=_AGENT_NAMES.get(a.agent_role, a.agent_role),
@@ -39,7 +39,7 @@ def _analysis_to_response(a: AgentAnalysis) -> AgentAnalysisResponse:
     )
 
 
-def _synthesis_to_response(s: ModeratorSynthesis) -> ModeratorSynthesisResponse:
+def synthesis_to_response(s: ModeratorSynthesis) -> ModeratorSynthesisResponse:
     return ModeratorSynthesisResponse(
         status=s.status,
         consensus=s.consensus,
@@ -59,7 +59,7 @@ def _synthesis_to_response(s: ModeratorSynthesis) -> ModeratorSynthesisResponse:
     )
 
 
-def _build_input(req: AnalyzeRequest) -> dict:
+def build_input(req: AnalyzeRequest) -> dict:
     return {
         "event_type": req.event_type,
         "title": req.title,
@@ -74,10 +74,10 @@ def _build_input(req: AnalyzeRequest) -> dict:
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     """Run all agents synchronously and return the full result."""
-    result = await graph.ainvoke(_build_input(req))
+    result = await graph.ainvoke(build_input(req))
 
-    agents = [_analysis_to_response(a) for a in result["analyses"]]
-    moderator = _synthesis_to_response(result["moderator_synthesis"])
+    agents = [analysis_to_response(a) for a in result["analyses"]]
+    moderator = synthesis_to_response(result["moderator_synthesis"])
 
     return AnalyzeResponse(agents=agents, moderator_summary=moderator)
 
@@ -86,12 +86,12 @@ async def _event_generator(req: AnalyzeRequest) -> AsyncGenerator[dict, None]:
     """Yield SSE events as the graph executes."""
     yield {"event": "start", "data": json.dumps({"status": "processing"})}
 
-    async for event in graph.astream(_build_input(req), stream_mode="updates"):
+    async for event in graph.astream(build_input(req), stream_mode="updates"):
         for node_name, node_output in event.items():
             if node_name in ("compliance", "security", "engineering"):
                 analyses = node_output.get("analyses", [])
                 for analysis in analyses:
-                    resp = _analysis_to_response(analysis)
+                    resp = analysis_to_response(analysis)
                     yield {
                         "event": "agent_complete",
                         "data": resp.model_dump_json(),
@@ -99,7 +99,7 @@ async def _event_generator(req: AnalyzeRequest) -> AsyncGenerator[dict, None]:
             elif node_name == "moderator":
                 synthesis = node_output.get("moderator_synthesis")
                 if synthesis:
-                    resp = _synthesis_to_response(synthesis)
+                    resp = synthesis_to_response(synthesis)
                     yield {
                         "event": "moderator_complete",
                         "data": resp.model_dump_json(),

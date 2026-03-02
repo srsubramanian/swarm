@@ -2,7 +2,7 @@
 title: Event queue
 ---
 
-Submit pre-built scenarios by name to observe how the LLM agents react to different event types. No need to construct full JSON payloads — just pick a scenario and watch the agents analyze it in real time. {% .lead %}
+Submit pre-built scenarios by name to observe how the LLM agents react to different event types. No need to construct full JSON payloads — just pick a scenario and the system runs the full pipeline, persists the result, and returns it. {% .lead %}
 
 ---
 
@@ -12,7 +12,7 @@ The analyze endpoints (`/api/analyze` and `/api/analyze/stream`) require a full 
 
 This is useful for:
 
-- **Demos** — Show how agents react to different risk scenarios without hand-crafting payloads
+- **Demos** — Show how agents react to different risk scenarios without hand-crafting payloads. Results are persisted so you can review them in a timeline via `GET /api/conversations` and clear between runs with `DELETE /api/conversations`.
 - **Development** — Quickly trigger agent analysis while building frontend features
 - **Testing agent behavior** — Observe how real LLM agents handle wire transfers, security alerts, velocity anomalies, and structuring patterns
 
@@ -47,7 +47,7 @@ curl -X POST http://localhost:3000/api/queue \
   -d '{"scenario": "wire_transfer"}'
 ```
 
-Returns the same JSON shape as `POST /api/analyze` — three agent analyses plus a moderator synthesis.
+Returns a `ConversationRecord` with camelCase keys — includes `id`, agents, messages, moderator summary, action items, and client memory. The result is also persisted and retrievable via `GET /api/conversations/{id}`.
 
 ### Submit a scenario (SSE stream)
 
@@ -58,7 +58,7 @@ curl -X POST http://localhost:3000/api/queue/stream \
   -d '{"scenario": "security_alert"}'
 ```
 
-Returns the same SSE events as `POST /api/analyze/stream` — `start`, `agent_complete` (x3), `moderator_complete`, `done`.
+Returns SSE events — `start`, `agent_complete` (x3), `moderator_complete`, `done`. The `done` event includes a `conversation_id` for retrieving the persisted result.
 
 ---
 
@@ -144,6 +144,8 @@ $9,800 cash deposit, the third this week ($9,500 + $9,700 + $9,800 = $29,000). A
 
 **File:** `backend/app/agents/scenarios.py` — Four `AnalyzeRequest` Pydantic instances, one per scenario.
 
-**File:** `backend/app/api/queue.py` — Three endpoints that look up scenarios and delegate to the existing `analyze()` and `analyze_stream()` functions. The full LangGraph pipeline (prepare → 3 agents → moderator) is exercised with the real LLM on every request.
+**File:** `backend/app/api/queue.py` — Three endpoints that look up scenarios, run the LangGraph pipeline directly, and persist results via `InMemoryConversationStore`. The full pipeline (prepare → 3 agents → moderator) is exercised with the real LLM on every request.
 
-See the [Queue API reference](/docs/api-queue) for full endpoint documentation.
+**File:** `backend/app/services/store.py` — In-memory conversation store singleton (dict-backed). Queue submissions are auto-saved. Clear between demos with `DELETE /api/conversations`.
+
+See the [Queue API reference](/docs/api-queue) and [Conversations API](/docs/api-conversations) for full endpoint documentation.

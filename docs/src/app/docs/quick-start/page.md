@@ -96,24 +96,30 @@ You'll see SSE events in this order:
 
 ## Use the event queue (shortcut)
 
-Instead of constructing full JSON payloads, submit pre-built scenarios by name:
+Instead of constructing full JSON payloads, submit pre-built scenarios by name. Results are auto-persisted so you can review them later:
 
 ```shell
 # List available scenarios
 curl http://localhost:3000/api/queue/scenarios
 
-# Submit a scenario (sync)
+# Submit a scenario (sync — result is persisted)
 curl -X POST http://localhost:3000/api/queue \
   -H "Content-Type: application/json" \
   -d '{"scenario": "wire_transfer"}'
 
-# Submit a scenario (SSE stream)
+# Submit a scenario (SSE stream — result is persisted after stream completes)
 curl -X POST http://localhost:3000/api/queue/stream \
   -H "Content-Type: application/json" \
   -d '{"scenario": "security_alert"}'
+
+# Review all persisted conversations
+curl http://localhost:3000/api/conversations
+
+# Clear between demos
+curl -X DELETE http://localhost:3000/api/conversations
 ```
 
-Four scenarios are available: `wire_transfer`, `velocity_alert`, `security_alert`, `cash_deposit`. See the [Queue API reference](/docs/api-queue) for details.
+Four scenarios are available: `wire_transfer`, `velocity_alert`, `security_alert`, `cash_deposit`. See the [Queue API reference](/docs/api-queue) and [Conversations API](/docs/api-conversations) for details.
 
 ---
 

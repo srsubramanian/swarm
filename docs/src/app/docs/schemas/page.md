@@ -177,6 +177,92 @@ interface Conversation {
 
 ---
 
+---
+
+## Conversation schemas (camelCase)
+
+Defined in `backend/app/schemas/conversations.py`. These models use Pydantic's `alias_generator=to_camel` so JSON output is camelCase, matching the frontend TypeScript interfaces directly.
+
+### ConversationRecord
+
+The top-level model returned by queue endpoints and the conversations API:
+
+```python
+class ConversationRecord(_CamelModel):
+    id: str                  # UUID
+    title: str
+    client_name: str         # → clientName in JSON
+    risk_level: str          # → riskLevel
+    status: str              # "awaiting_decision"
+    event_type: str          # → eventType
+    started_at: str          # → startedAt (ISO 8601 UTC)
+    message_count: int       # → messageCount
+    agents: list[AgentInfoRecord]
+    messages: list[MessageRecord]
+    moderator_summary: ModeratorSummaryRecord    # → moderatorSummary
+    action_required: ActionRequiredRecord        # → actionRequired
+    client_memory: ClientMemoryRecord            # → clientMemory
+```
+
+### AgentInfoRecord
+
+```python
+class AgentInfoRecord(_CamelModel):
+    role: str       # "compliance" | "security" | "engineering"
+    name: str       # "Compliance Analyst", etc.
+    status: str     # "complete"
+    position: str   # One-sentence position statement
+```
+
+### MessageRecord
+
+```python
+class MessageRecord(_CamelModel):
+    id: str              # UUID
+    agent_role: str      # → agentRole
+    agent_name: str      # → agentName
+    content: str         # Full analysis markdown
+    timestamp: str       # ISO 8601 UTC
+```
+
+### ModeratorSummaryRecord
+
+```python
+class ModeratorSummaryRecord(_CamelModel):
+    status: str
+    consensus: str            # Includes dissent if present
+    key_decisions: list[str]  # → keyDecisions
+    risk_assessment: str      # → riskAssessment
+    next_steps: list[str]     # → nextSteps
+```
+
+### ActionRequiredRecord / ActionOptionRecord
+
+```python
+class ActionRequiredRecord(_CamelModel):
+    status: str                          # "pending" | "actioned"
+    options: list[ActionOptionRecord]
+    actioned_option: str | None = None   # → actionedOption
+
+class ActionOptionRecord(_CamelModel):
+    id: str
+    label: str
+    variant: str    # "primary" | "secondary" | "danger"
+```
+
+### ClientMemoryRecord
+
+```python
+class ClientMemoryRecord(_CamelModel):
+    client_name: str      # → clientName
+    content: str
+    last_updated: str     # → lastUpdated (ISO 8601 UTC)
+```
+
+---
+
 ## Schema alignment
 
 The backend `AgentAnalysisResponse` maps to the frontend `AgentInfo` + `Message` content. The backend `ModeratorSynthesisResponse` maps to the frontend `ModeratorSummaryData`. Field naming follows each language's conventions — `snake_case` in Python, `camelCase` in TypeScript.
+
+The `ConversationRecord` models bridge this gap — they use Python `snake_case` internally but serialize to `camelCase` JSON via Pydantic aliases, matching the frontend `Conversation` interface 1:1. Queue endpoints return `ConversationRecord` directly, so the frontend can consume the response without transformation.

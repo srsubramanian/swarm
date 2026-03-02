@@ -66,13 +66,14 @@ Event → prepare → ┌─ Compliance ─┐
 
 SwarmOps is under active development. What's built:
 
-- FastAPI app with CORS, health check, analyze endpoints, and queue endpoints
+- FastAPI app with CORS, health check, analyze endpoints, queue endpoints, and conversation history endpoints
 - LangGraph orchestrator with parallel fan-out/fan-in
 - Three domain agents with structured Pydantic output
 - Moderator synthesis with action items
 - SSE streaming for real-time agent updates
-- Event queue with 4 pre-built scenarios — submit by name, observe real LLM agent reactions
+- Event queue with 4 pre-built scenarios — submit by name, results auto-persist
+- Conversation history — in-memory store with list/get/clear endpoints; response shape matches frontend TypeScript types (camelCase JSON)
 - Docker setup with nginx reverse proxy
 - Frontend UI scaffold with Tailwind CSS
 
-See the [development guide](/docs/development) for the full build roadmap or the [event queue](/docs/event-queue) to quickly trigger agent analysis.
+See the [development guide](/docs/development) for the full build roadmap, the [event queue](/docs/event-queue) to quickly trigger agent analysis, or the [Conversations API](/docs/api-conversations) to review persisted results.

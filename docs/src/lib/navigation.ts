@@ -24,6 +24,7 @@ export const navigation = [
       { title: 'POST /api/analyze/stream', href: '/docs/api-analyze-stream' },
       { title: 'Schemas', href: '/docs/schemas' },
       { title: 'Queue API', href: '/docs/api-queue' },
+      { title: 'Conversations API', href: '/docs/api-conversations' },
     ],
   },
   {

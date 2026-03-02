@@ -142,10 +142,13 @@ class TestQueueEndpoints:
 
         assert resp.status_code == 200
         data = resp.json()
+        # Queue now returns ConversationRecord (camelCase)
         assert len(data["agents"]) == 3
-        roles = {a["agent_role"] for a in data["agents"]}
+        roles = {a["role"] for a in data["agents"]}
         assert roles == {"compliance", "security", "engineering"}
-        assert data["moderator_summary"]["status"] == "HOLD RECOMMENDED"
+        assert data["moderatorSummary"]["status"] == "HOLD RECOMMENDED"
+        assert "id" in data
+        assert data["clientName"] == "Meridian Holdings"
 
     @pytest.mark.asyncio
     async def test_queue_unknown_scenario_returns_404(self):
@@ -190,10 +193,10 @@ class TestQueueEndpoints:
 
         assert resp.status_code == 200
         data = resp.json()
-        # Same shape as /api/analyze response
+        # Queue returns ConversationRecord (camelCase)
         assert "agents" in data
-        assert "moderator_summary" in data
-        summary = data["moderator_summary"]
+        assert "moderatorSummary" in data
+        summary = data["moderatorSummary"]
         assert "status" in summary
-        assert "action_items" in summary
-        assert len(summary["action_items"]) >= 2
+        assert "actionRequired" in data
+        assert len(data["actionRequired"]["options"]) >= 2

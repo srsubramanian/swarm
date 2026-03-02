@@ -30,10 +30,13 @@ Event → prepare → ┌─ Compliance ─┐
 The Python backend handles API routing, agent orchestration, and LLM calls:
 
 - **FastAPI app** (`backend/app/main.py`) — CORS, health check, router registration
-- **Analyze endpoints** (`backend/app/api/conversations.py`) — Sync and SSE streaming
+- **Analyze endpoints** (`backend/app/api/conversations.py`) — Sync and SSE streaming (stateless)
+- **Queue endpoints** (`backend/app/api/queue.py`) — Submit scenarios by name, auto-persist results
+- **History endpoints** (`backend/app/api/history.py`) — List, get, and clear persisted conversations
 - **LangGraph orchestrator** (`backend/app/agents/orchestrator.py`) — Graph topology
 - **Agent nodes** (`backend/app/agents/nodes/`) — Compliance, Security, Engineering, Moderator
 - **Prompt templates** (`backend/app/agents/prompts/`) — Version-controlled markdown
+- **Conversation store** (`backend/app/services/store.py`) — In-memory persistence for demo use
 
 ### Frontend (React + TypeScript)
 

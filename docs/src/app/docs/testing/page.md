@@ -23,10 +23,11 @@ uv run pytest tests/test_orchestrator.py -v
 
 ## Test structure
 
-Tests are spread across two files:
+Tests are spread across three files:
 
 - `backend/tests/test_orchestrator.py` — Graph topology, mocked LLM execution, API response (6 tests)
 - `backend/tests/test_queue.py` — Scenario registry and queue endpoint tests (11 tests)
+- `backend/tests/test_conversations.py` — Store, builder, history endpoints, camelCase serialization (18 tests)
 
 ### test_orchestrator.py
 
@@ -93,6 +94,48 @@ class TestAPIResponse:
         assert resp.status_code == 200
         assert len(data["agents"]) == 3
         assert data["moderator_summary"]["status"] == "HOLD RECOMMENDED"
+```
+
+---
+
+### test_conversations.py
+
+Tests the in-memory store, conversation builder, and history endpoints. Uses an `autouse` fixture to clear the store between tests.
+
+**TestInMemoryStore** — Unit tests for `InMemoryConversationStore`:
+
+```python
+class TestInMemoryStore:
+    def test_save_and_get(self): ...
+    def test_list_newest_first(self): ...
+    def test_clear_returns_count(self): ...
+    def test_overwrite_by_id(self): ...
+    def test_get_nonexistent_returns_none(self): ...
+```
+
+**TestBuildConversation** — Validates `build_conversation()` output:
+
+```python
+class TestBuildConversation:
+    def test_builds_valid_record(self): ...
+    def test_agents_populated(self): ...
+    def test_messages_populated(self): ...
+    def test_moderator_summary_populated(self): ...
+    def test_action_required_populated(self): ...
+    def test_client_memory_populated(self): ...
+    def test_camel_case_serialization(self): ...
+```
+
+**TestConversationEndpoints** — Integration tests for the full flow:
+
+```python
+class TestConversationEndpoints:
+    async def test_queue_persists_and_list_returns(self): ...
+    async def test_get_by_id(self): ...
+    async def test_get_nonexistent_returns_404(self): ...
+    async def test_delete_clears_all(self): ...
+    async def test_analyze_does_not_persist(self): ...
+    async def test_queue_response_has_camel_case_keys(self): ...
 ```
 
 ---
@@ -184,6 +227,12 @@ An HTTP client file with pre-built test requests:
 12. `POST /api/queue` — Cash deposit (sync)
 13. `POST /api/queue/stream` — Wire transfer (SSE)
 14. `POST /api/queue/stream` — Security alert (SSE)
+
+**History endpoints:**
+
+15. `GET /api/conversations` — List all persisted conversations
+16. `GET /api/conversations/{id}` — Get a single conversation by ID
+17. `DELETE /api/conversations` — Clear all persisted conversations
 
 Use with VS Code REST Client extension or IntelliJ HTTP Client.
 

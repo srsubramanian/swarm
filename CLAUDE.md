@@ -30,10 +30,12 @@ swarmops/
 │   │   ├── core/
 │   │   │   └── config.py        # Settings(BaseSettings) — Bedrock region/model, CORS origins (env prefix: SWARM_)
 │   │   ├── schemas/
-│   │   │   └── events.py        # AnalyzeRequest/Response, AgentAnalysisResponse, ModeratorSynthesisResponse
+│   │   │   ├── events.py        # AnalyzeRequest/Response, AgentAnalysisResponse, ModeratorSynthesisResponse
+│   │   │   └── conversations.py # ConversationRecord + nested models (camelCase aliases matching frontend types)
 │   │   ├── api/
 │   │   │   ├── conversations.py # POST /api/analyze (sync) + POST /api/analyze/stream (SSE)
-│   │   │   └── queue.py         # POST /api/queue (sync/stream) + GET /api/queue/scenarios
+│   │   │   ├── queue.py         # POST /api/queue (sync/stream) + GET /api/queue/scenarios — persists to store
+│   │   │   └── history.py       # GET/DELETE /api/conversations, GET /api/conversations/{id}
 │   │   ├── agents/
 │   │   │   ├── orchestrator.py  # StateGraph: fan-out 3 agents → moderator (compiled graph singleton)
 │   │   │   ├── state.py         # SwarmState(TypedDict) with Annotated[list, operator.add] reducer
@@ -52,12 +54,15 @@ swarmops/
 │   │   │       ├── engineering.md
 │   │   │       └── moderator.md
 │   │   ├── models/              # (future) SQLAlchemy models
-│   │   ├── services/            # (future) Business logic layer
+│   │   ├── services/
+│   │   │   ├── store.py             # InMemoryConversationStore singleton (dict-backed, demo use)
+│   │   │   └── conversation_builder.py  # build_conversation(req, analyses, synthesis) → ConversationRecord
 │   │   ├── tasks/               # (future) ARQ background tasks
 │   │   └── ws/                  # (future) SSE streaming endpoints
 │   ├── tests/
-│   │   ├── test_orchestrator.py # Graph topology + full run with mocked LLM + API endpoint tests
-│   │   └── test_queue.py        # Scenario registry + queue endpoint tests (11 tests)
+│   │   ├── test_orchestrator.py   # Graph topology + full run with mocked LLM + API endpoint tests
+│   │   ├── test_queue.py          # Scenario registry + queue endpoint tests
+│   │   └── test_conversations.py  # Store, builder, history endpoint, and camelCase serialization tests
 │   └── requests.http            # HTTP client file for manual API testing
 ├── frontend/
 │   └── src/
@@ -151,6 +156,7 @@ The project is scaffolded incrementally. Each step is self-contained:
 3. **LangGraph orchestrator with parallel agents** — DONE
 4. **SSE streaming** — DONE (bundled with step 3)
 4.5. **Event queue with pre-built scenarios** — DONE (submit scenarios by name via `/api/queue`)
+4.6. **Conversation history (in-memory)** — DONE (queue submissions auto-persist, history endpoints for list/get/clear)
 5. Action items + RM queue
 6. Client memory (read/write/approve)
 7. ARQ background tasks (knowledge extraction, archival, compaction)
@@ -158,24 +164,24 @@ The project is scaffolded incrementally. Each step is self-contained:
 9. Auth + multi-tenancy
 10. Infrastructure + deployment
 
-### What's Built (Steps 1, 3, 4, 4.5)
+### What's Built (Steps 1, 3, 4, 4.5, 4.6)
 
-- **FastAPI app** with CORS, health check, analyze endpoints, and queue endpoints
+- **FastAPI app** with CORS, health check, analyze endpoints, queue endpoints, and history endpoints
 - **LangGraph orchestrator** — `START → prepare → [compliance | security | engineering] → moderator → END`
 - **3 domain agents** running in parallel via LangGraph fan-out, each with structured output (`AgentAnalysis`)
 - **Moderator node** synthesizing into `ModeratorSynthesis` with action items
 - **SSE streaming** via `graph.astream(stream_mode="updates")` — emits `start`, `agent_complete` (×3), `moderator_complete`, `done`
-- **Event queue** — 4 pre-built scenarios (wire_transfer, velocity_alert, security_alert, cash_deposit) with distinct risk profiles; queue endpoints (`/api/queue`) accept scenario names instead of full JSON payloads and delegate to the real LLM pipeline
+- **Event queue** — 4 pre-built scenarios (wire_transfer, velocity_alert, security_alert, cash_deposit) with distinct risk profiles; queue endpoints (`/api/queue`) accept scenario names, run the full LLM pipeline, and **persist results** as `ConversationRecord`
+- **Conversation history** — In-memory store (`InMemoryConversationStore`) auto-saves queue submissions; history endpoints (`GET /api/conversations`, `GET /api/conversations/{id}`, `DELETE /api/conversations`) for listing, retrieving, and clearing; response shape matches frontend `Conversation` type (camelCase JSON via Pydantic aliases); `/api/analyze` endpoints remain stateless
 - **Adaptive retry** on Bedrock calls (handles throttling from parallel agent calls)
 - **Pydantic validators** to coerce LLM output quirks (bullet strings → lists)
 - **Docker setup** — multi-stage build, nginx reverse proxy with SSE support, supervisord
 - **Frontend UI** — fully styled conversation components (using mock data, not yet wired to API)
-- **Tests** — 17 passing (topology, mocked LLM full run, API endpoint, scenarios, queue endpoints)
+- **Tests** — 35 passing (topology, mocked LLM full run, API endpoint, scenarios, queue endpoints, store, builder, history endpoints, camelCase serialization)
 
 ### What's NOT Built Yet
 
-- Database models / Alembic migrations
-- Conversation CRUD / persistence
+- Database models / Alembic migrations (in-memory store used for now)
 - Action item queue with RM approve/reject/escalate
 - Client memory read/write/approve
 - ARQ background tasks
