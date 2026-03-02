@@ -1,13 +1,11 @@
-"""Security agent node."""
+"""Security agent node — deep agent with tool use."""
 
 import json
 from pathlib import Path
 
-from langchain_core.messages import HumanMessage, SystemMessage
-
-from app.agents.llm import get_llm
-from app.agents.schemas import AgentAnalysis
 from app.agents.state import SwarmState
+from app.agents.tool_loop import run_agent_with_tools
+from app.agents.tools import SECURITY_TOOLS
 
 _PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "security.md"
 
@@ -35,13 +33,10 @@ def _format_event(state: SwarmState) -> str:
 
 
 async def security_agent(state: SwarmState) -> dict:
-    llm = get_llm()
-    structured_llm = llm.with_structured_output(AgentAnalysis)
-    result = await structured_llm.ainvoke(
-        [
-            SystemMessage(content=_load_prompt()),
-            HumanMessage(content=_format_event(state)),
-        ]
+    return await run_agent_with_tools(
+        state=state,
+        agent_role="security",
+        system_prompt=_load_prompt(),
+        event_message=_format_event(state),
+        tools=SECURITY_TOOLS,
     )
-    result.agent_role = "security"
-    return {"analyses": [result]}

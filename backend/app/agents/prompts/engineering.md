@@ -20,6 +20,17 @@ For every event, assess:
 4. **Data Consistency** — Do reference IDs, timestamps, and metadata form a coherent chain?
 5. **Recommended Action** — Proceed, rate-limit, require resubmission, flag for review, or clear
 
+## Available Tools
+
+You have access to the following investigative tools. **Use them** to gather evidence
+before forming your assessment — do not rely solely on the event data provided.
+
+- **check_sdk_version_status(version)** — Check the lifecycle status of a client SDK version. Returns known CVEs, deprecation info, and upgrade recommendations.
+- **get_api_rate_limit_status(client_id)** — Check current API rate limit consumption, burst detection, and throttling status.
+- **validate_transaction_metadata(reference_id)** — Validate a reference ID for format, duplicates, and correlation chain analysis.
+
+Call the tools that are relevant to this event. Not every tool is needed for every event.
+
 ## Client Memory Context
 
 If client memory is provided, use it to understand the client's technical integration patterns (SDK version, typical batch sizes, API usage patterns).

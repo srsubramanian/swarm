@@ -1,12 +1,11 @@
-"""Compliance agent node."""
+"""Compliance agent node — deep agent with tool use."""
 
+import json
 from pathlib import Path
 
-from langchain_core.messages import HumanMessage, SystemMessage
-
-from app.agents.llm import get_llm
-from app.agents.schemas import AgentAnalysis
 from app.agents.state import SwarmState
+from app.agents.tool_loop import run_agent_with_tools
+from app.agents.tools import COMPLIANCE_TOOLS
 
 _PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "compliance.md"
 
@@ -23,11 +22,9 @@ def _format_event(state: SwarmState) -> str:
         "",
         "### Event Data",
         "```json",
+        json.dumps(state["event_data"], indent=2, default=str),
+        "```",
     ]
-    import json
-
-    parts.append(json.dumps(state["event_data"], indent=2, default=str))
-    parts.append("```")
 
     if state.get("client_memory"):
         parts.extend(["", "### Client Memory", state["client_memory"]])
@@ -36,13 +33,10 @@ def _format_event(state: SwarmState) -> str:
 
 
 async def compliance_agent(state: SwarmState) -> dict:
-    llm = get_llm()
-    structured_llm = llm.with_structured_output(AgentAnalysis)
-    result = await structured_llm.ainvoke(
-        [
-            SystemMessage(content=_load_prompt()),
-            HumanMessage(content=_format_event(state)),
-        ]
+    return await run_agent_with_tools(
+        state=state,
+        agent_role="compliance",
+        system_prompt=_load_prompt(),
+        event_message=_format_event(state),
+        tools=COMPLIANCE_TOOLS,
     )
-    result.agent_role = "compliance"
-    return {"analyses": [result]}

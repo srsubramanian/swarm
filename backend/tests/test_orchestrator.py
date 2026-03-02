@@ -4,6 +4,7 @@ import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from app.agents.orchestrator import build_graph, graph
 from app.agents.schemas import ActionItem, AgentAnalysis, ModeratorSynthesis
@@ -60,6 +61,34 @@ def _mock_moderator_synthesis() -> ModeratorSynthesis:
     )
 
 
+def _create_mock_llm():
+    """Create a mock LLM that supports bind_tools() and with_structured_output()."""
+
+    async def mock_structured_ainvoke(messages):
+        system_content = messages[0].content
+        if system_content.startswith("# Moderator"):
+            return _mock_moderator_synthesis()
+        elif system_content.startswith("# Compliance"):
+            return _mock_agent_analysis("compliance")
+        elif system_content.startswith("# Security"):
+            return _mock_agent_analysis("security")
+        elif system_content.startswith("# Engineering"):
+            return _mock_agent_analysis("engineering")
+        raise ValueError(f"Unexpected prompt: {system_content[:100]}")
+
+    mock_structured = AsyncMock()
+    mock_structured.ainvoke = mock_structured_ainvoke
+
+    # Tool-bound LLM returns AIMessage with no tool_calls (loop exits immediately)
+    mock_tool_bound = AsyncMock()
+    mock_tool_bound.ainvoke = AsyncMock(return_value=AIMessage(content="Analysis complete."))
+
+    mock_llm = MagicMock()
+    mock_llm.with_structured_output.return_value = mock_structured
+    mock_llm.bind_tools.return_value = mock_tool_bound
+    return mock_llm
+
+
 # --- Topology Tests ---
 
 
@@ -88,29 +117,9 @@ class TestGraphExecution:
     @pytest.mark.asyncio
     async def test_full_run_produces_moderator_synthesis(self):
         """Full graph run with mocked LLM produces a moderator synthesis."""
+        mock_llm = _create_mock_llm()
 
-        async def mock_ainvoke(messages):
-            """Route mock responses based on prompt content."""
-            system_content = messages[0].content
-            if system_content.startswith("# Moderator"):
-                return _mock_moderator_synthesis()
-            elif system_content.startswith("# Compliance"):
-                return _mock_agent_analysis("compliance")
-            elif system_content.startswith("# Security"):
-                return _mock_agent_analysis("security")
-            elif system_content.startswith("# Engineering"):
-                return _mock_agent_analysis("engineering")
-            raise ValueError(f"Unexpected prompt: {system_content[:100]}")
-
-        mock_structured = AsyncMock()
-        mock_structured.ainvoke = mock_ainvoke
-
-        mock_llm = MagicMock()
-        mock_llm.with_structured_output.return_value = mock_structured
-
-        with patch("app.agents.nodes.compliance.get_llm", return_value=mock_llm), \
-             patch("app.agents.nodes.security.get_llm", return_value=mock_llm), \
-             patch("app.agents.nodes.engineering.get_llm", return_value=mock_llm), \
+        with patch("app.agents.tool_loop.get_llm", return_value=mock_llm), \
              patch("app.agents.nodes.moderator.get_llm", return_value=mock_llm):
             result = await graph.ainvoke(_sample_input())
 
@@ -129,28 +138,9 @@ class TestGraphExecution:
     @pytest.mark.asyncio
     async def test_analyses_contain_expected_fields(self):
         """Each agent analysis has all required fields populated."""
+        mock_llm = _create_mock_llm()
 
-        async def mock_ainvoke(messages):
-            system_content = messages[0].content
-            if system_content.startswith("# Moderator"):
-                return _mock_moderator_synthesis()
-            elif system_content.startswith("# Compliance"):
-                return _mock_agent_analysis("compliance")
-            elif system_content.startswith("# Security"):
-                return _mock_agent_analysis("security")
-            elif system_content.startswith("# Engineering"):
-                return _mock_agent_analysis("engineering")
-            raise ValueError(f"Unexpected prompt: {system_content[:100]}")
-
-        mock_structured = AsyncMock()
-        mock_structured.ainvoke = mock_ainvoke
-
-        mock_llm = MagicMock()
-        mock_llm.with_structured_output.return_value = mock_structured
-
-        with patch("app.agents.nodes.compliance.get_llm", return_value=mock_llm), \
-             patch("app.agents.nodes.security.get_llm", return_value=mock_llm), \
-             patch("app.agents.nodes.engineering.get_llm", return_value=mock_llm), \
+        with patch("app.agents.tool_loop.get_llm", return_value=mock_llm), \
              patch("app.agents.nodes.moderator.get_llm", return_value=mock_llm):
             result = await graph.ainvoke(_sample_input())
 
@@ -174,27 +164,9 @@ class TestAPIResponse:
         from httpx import ASGITransport, AsyncClient
         from app.main import app
 
-        async def mock_ainvoke(messages):
-            system_content = messages[0].content
-            if system_content.startswith("# Moderator"):
-                return _mock_moderator_synthesis()
-            elif system_content.startswith("# Compliance"):
-                return _mock_agent_analysis("compliance")
-            elif system_content.startswith("# Security"):
-                return _mock_agent_analysis("security")
-            elif system_content.startswith("# Engineering"):
-                return _mock_agent_analysis("engineering")
-            raise ValueError(f"Unexpected prompt: {system_content[:100]}")
+        mock_llm = _create_mock_llm()
 
-        mock_structured = AsyncMock()
-        mock_structured.ainvoke = mock_ainvoke
-
-        mock_llm = MagicMock()
-        mock_llm.with_structured_output.return_value = mock_structured
-
-        with patch("app.agents.nodes.compliance.get_llm", return_value=mock_llm), \
-             patch("app.agents.nodes.security.get_llm", return_value=mock_llm), \
-             patch("app.agents.nodes.engineering.get_llm", return_value=mock_llm), \
+        with patch("app.agents.tool_loop.get_llm", return_value=mock_llm), \
              patch("app.agents.nodes.moderator.get_llm", return_value=mock_llm):
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from langchain_core.messages import AIMessage
 
 from app.agents.schemas import ActionItem, AgentAnalysis, ModeratorSynthesis
 from app.schemas.conversations import ConversationRecord
@@ -70,7 +71,9 @@ def _mock_analyses() -> list[AgentAnalysis]:
 
 
 def _create_mock_llm():
-    async def mock_ainvoke(messages):
+    """Create a mock LLM that supports bind_tools() and with_structured_output()."""
+
+    async def mock_structured_ainvoke(messages):
         system_content = messages[0].content
         if system_content.startswith("# Moderator"):
             return _mock_moderator_synthesis()
@@ -83,19 +86,22 @@ def _create_mock_llm():
         raise ValueError(f"Unexpected prompt: {system_content[:100]}")
 
     mock_structured = AsyncMock()
-    mock_structured.ainvoke = mock_ainvoke
+    mock_structured.ainvoke = mock_structured_ainvoke
+
+    # Tool-bound LLM returns AIMessage with no tool_calls (loop exits immediately)
+    mock_tool_bound = AsyncMock()
+    mock_tool_bound.ainvoke = AsyncMock(return_value=AIMessage(content="Analysis complete."))
 
     mock_llm = MagicMock()
     mock_llm.with_structured_output.return_value = mock_structured
+    mock_llm.bind_tools.return_value = mock_tool_bound
     return mock_llm
 
 
 def _llm_patches():
     mock_llm = _create_mock_llm()
     return (
-        patch("app.agents.nodes.compliance.get_llm", return_value=mock_llm),
-        patch("app.agents.nodes.security.get_llm", return_value=mock_llm),
-        patch("app.agents.nodes.engineering.get_llm", return_value=mock_llm),
+        patch("app.agents.tool_loop.get_llm", return_value=mock_llm),
         patch("app.agents.nodes.moderator.get_llm", return_value=mock_llm),
     )
 
@@ -266,8 +272,8 @@ class TestConversationEndpoints:
     @pytest.mark.asyncio
     async def test_queue_persists_and_list_returns(self):
         """POST /api/queue persists result, GET /api/conversations returns it."""
-        p1, p2, p3, p4 = _llm_patches()
-        with p1, p2, p3, p4:
+        p1, p2 = _llm_patches()
+        with p1, p2:
             from app.main import app
 
             transport = ASGITransport(app=app)
@@ -294,8 +300,8 @@ class TestConversationEndpoints:
     @pytest.mark.asyncio
     async def test_get_by_id(self):
         """GET /api/conversations/{id} returns the correct conversation."""
-        p1, p2, p3, p4 = _llm_patches()
-        with p1, p2, p3, p4:
+        p1, p2 = _llm_patches()
+        with p1, p2:
             from app.main import app
 
             transport = ASGITransport(app=app)
@@ -325,8 +331,8 @@ class TestConversationEndpoints:
     @pytest.mark.asyncio
     async def test_delete_clears_all(self):
         """DELETE /api/conversations clears the store."""
-        p1, p2, p3, p4 = _llm_patches()
-        with p1, p2, p3, p4:
+        p1, p2 = _llm_patches()
+        with p1, p2:
             from app.main import app
 
             transport = ASGITransport(app=app)
@@ -359,8 +365,8 @@ class TestConversationEndpoints:
     @pytest.mark.asyncio
     async def test_analyze_does_not_persist(self):
         """POST /api/analyze remains stateless — no conversations stored."""
-        p1, p2, p3, p4 = _llm_patches()
-        with p1, p2, p3, p4:
+        p1, p2 = _llm_patches()
+        with p1, p2:
             from app.main import app
 
             transport = ASGITransport(app=app)
@@ -384,8 +390,8 @@ class TestConversationEndpoints:
     @pytest.mark.asyncio
     async def test_queue_response_has_camel_case_keys(self):
         """POST /api/queue response uses camelCase keys."""
-        p1, p2, p3, p4 = _llm_patches()
-        with p1, p2, p3, p4:
+        p1, p2 = _llm_patches()
+        with p1, p2:
             from app.main import app
 
             transport = ASGITransport(app=app)

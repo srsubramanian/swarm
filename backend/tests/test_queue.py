@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from langchain_core.messages import AIMessage
 
 from app.agents.scenarios import SCENARIOS
 from app.agents.schemas import ActionItem, AgentAnalysis, ModeratorSynthesis
@@ -42,9 +43,9 @@ def _mock_moderator_synthesis() -> ModeratorSynthesis:
 
 
 def _create_mock_llm():
-    """Create a mock LLM that routes responses by prompt header."""
+    """Create a mock LLM that supports bind_tools() and with_structured_output()."""
 
-    async def mock_ainvoke(messages):
+    async def mock_structured_ainvoke(messages):
         system_content = messages[0].content
         if system_content.startswith("# Moderator"):
             return _mock_moderator_synthesis()
@@ -57,10 +58,15 @@ def _create_mock_llm():
         raise ValueError(f"Unexpected prompt: {system_content[:100]}")
 
     mock_structured = AsyncMock()
-    mock_structured.ainvoke = mock_ainvoke
+    mock_structured.ainvoke = mock_structured_ainvoke
+
+    # Tool-bound LLM returns AIMessage with no tool_calls (loop exits immediately)
+    mock_tool_bound = AsyncMock()
+    mock_tool_bound.ainvoke = AsyncMock(return_value=AIMessage(content="Analysis complete."))
 
     mock_llm = MagicMock()
     mock_llm.with_structured_output.return_value = mock_structured
+    mock_llm.bind_tools.return_value = mock_tool_bound
     return mock_llm
 
 
@@ -127,9 +133,7 @@ class TestQueueEndpoints:
     async def test_queue_sync_returns_full_analysis(self):
         mock_llm = _create_mock_llm()
 
-        with patch("app.agents.nodes.compliance.get_llm", return_value=mock_llm), \
-             patch("app.agents.nodes.security.get_llm", return_value=mock_llm), \
-             patch("app.agents.nodes.engineering.get_llm", return_value=mock_llm), \
+        with patch("app.agents.tool_loop.get_llm", return_value=mock_llm), \
              patch("app.agents.nodes.moderator.get_llm", return_value=mock_llm):
             from app.main import app
             transport = ASGITransport(app=app)
@@ -178,9 +182,7 @@ class TestQueueEndpoints:
         """Queue endpoint produces the same shape as /api/analyze."""
         mock_llm = _create_mock_llm()
 
-        with patch("app.agents.nodes.compliance.get_llm", return_value=mock_llm), \
-             patch("app.agents.nodes.security.get_llm", return_value=mock_llm), \
-             patch("app.agents.nodes.engineering.get_llm", return_value=mock_llm), \
+        with patch("app.agents.tool_loop.get_llm", return_value=mock_llm), \
              patch("app.agents.nodes.moderator.get_llm", return_value=mock_llm):
             from app.main import app
             transport = ASGITransport(app=app)

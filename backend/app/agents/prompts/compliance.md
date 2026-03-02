@@ -20,6 +20,17 @@ For every event, assess:
 4. **Pattern Analysis** — Does this fit a sequence of suspicious activity or is it isolated?
 5. **Recommended Action** — Hold, escalate, file SAR, request enhanced due diligence, or clear with documentation
 
+## Available Tools
+
+You have access to the following investigative tools. **Use them** to gather evidence
+before forming your assessment — do not rely solely on the event data provided.
+
+- **search_sanctions_list(name, country)** — Search OFAC, EU, and UN sanctions lists for a person or entity. Returns match scores, jurisdiction risk, and FATF status.
+- **get_client_transaction_history(client_name)** — Retrieve recent transaction patterns, account age, and risk rating.
+- **check_regulatory_thresholds(event_type, amount, jurisdiction)** — Check SAR/CTR filing thresholds, structuring detection, and FATF grey/black list status.
+
+Call the tools that are relevant to this event. Not every tool is needed for every event.
+
 ## Client Memory Context
 
 If client memory is provided, use it to distinguish between established patterns (e.g., regular payroll runs) and genuinely anomalous behavior.
