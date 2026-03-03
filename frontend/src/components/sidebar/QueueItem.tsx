@@ -6,16 +6,16 @@ import { ChatBubbleLeftRightIcon } from '@heroicons/react/20/solid';
 interface QueueItemProps {
   conversation: Conversation;
   selected: boolean;
-  actioned: boolean;
   onClick: () => void;
 }
 
 export default function QueueItem({
   conversation,
   selected,
-  actioned,
   onClick,
 }: QueueItemProps) {
+  const isActioned = conversation.status === 'concluded';
+
   return (
     <button
       onClick={onClick}
@@ -39,7 +39,7 @@ export default function QueueItem({
           ))}
         </div>
         <div className="flex items-center gap-2">
-          {actioned && (
+          {isActioned && (
             <span className="text-xs text-green-400 font-medium">Actioned</span>
           )}
           <span className="flex items-center gap-1 text-xs text-gray-500">

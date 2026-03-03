@@ -52,6 +52,14 @@ class ModeratorSummaryRecord(_CamelModel):
     next_steps: list[str]
 
 
+class DecisionRecord(_CamelModel):
+    option_id: str
+    action: str  # "approve" | "reject" | "escalate" | "override"
+    justification: str
+    decided_by: str = "rm"
+    decided_at: str | None = None
+
+
 class ConversationRecord(_CamelModel):
     id: str
     title: str
@@ -66,3 +74,4 @@ class ConversationRecord(_CamelModel):
     moderator_summary: ModeratorSummaryRecord
     action_required: ActionRequiredRecord
     client_memory: ClientMemoryRecord
+    decision: DecisionRecord | None = None

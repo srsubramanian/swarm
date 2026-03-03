@@ -33,55 +33,99 @@ You could run three LLM calls with `asyncio.gather()`, but LangGraph provides:
 
 ## The SwarmOps graph
 
-The entire agent pipeline is defined in a single file (`backend/app/agents/orchestrator.py`) in under 50 lines:
+The agent pipeline is defined in `backend/app/agents/orchestrator.py` via a parameterized `build_graph` function that produces three graph variants:
 
 ```python
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 
-builder = StateGraph(SwarmState)
+_saver = InMemorySaver()
 
-# Five nodes
-builder.add_node("prepare", prepare_context)
-builder.add_node("compliance", compliance_agent)
-builder.add_node("security", security_agent)
-builder.add_node("engineering", engineering_agent)
-builder.add_node("moderator", moderator_node)
+def build_graph(checkpointer=_saver, include_triage=True):
+    builder = StateGraph(SwarmState)
 
-# Edges define the topology
-builder.add_edge(START, "prepare")
+    # Core nodes (always present)
+    builder.add_node("prepare", prepare_context)
+    builder.add_node("compliance", compliance_agent)
+    builder.add_node("security", security_agent)
+    builder.add_node("engineering", engineering_agent)
+    builder.add_node("moderator", moderator_node)
+    builder.add_node("await_decision", await_decision)
+    builder.add_node("post_decision", post_decision)
 
-# Fan-out: prepare → 3 agents in parallel
-builder.add_edge("prepare", "compliance")
-builder.add_edge("prepare", "security")
-builder.add_edge("prepare", "engineering")
+    builder.add_edge(START, "prepare")
 
-# Fan-in: all agents → moderator
-builder.add_edge("compliance", "moderator")
-builder.add_edge("security", "moderator")
-builder.add_edge("engineering", "moderator")
+    if include_triage:
+        builder.add_node("triage", triage_router)
+        builder.add_node("notify_rm", notify_rm)
+        builder.add_edge("prepare", "triage")
+        builder.add_conditional_edges("triage", triage_edge)
+        builder.add_edge("notify_rm", END)
+    else:
+        # Direct fan-out (no triage)
+        builder.add_edge("prepare", "compliance")
+        builder.add_edge("prepare", "security")
+        builder.add_edge("prepare", "engineering")
 
-builder.add_edge("moderator", END)
+    # Fan-in: all agents -> moderator
+    builder.add_edge("compliance", "moderator")
+    builder.add_edge("security", "moderator")
+    builder.add_edge("engineering", "moderator")
 
-graph = builder.compile()
+    # Decision flow
+    builder.add_edge("moderator", "await_decision")
+    builder.add_edge("await_decision", "post_decision")
+    builder.add_edge("post_decision", END)
+
+    return builder.compile(checkpointer=checkpointer)
+
+# Three module-level singletons
+stateless_graph = build_graph(checkpointer=None, include_triage=False)
+graph           = build_graph(checkpointer=_saver, include_triage=False)
+event_graph     = build_graph(checkpointer=_saver, include_triage=True)
 ```
 
-The compiled graph is a **module-level singleton** — built once at import time, reused for every request. This avoids the overhead of rebuilding the graph on each call.
+The two parameters control the graph's behaviour:
 
-### Topology: fan-out / fan-in
+- **checkpointer** -- pass `None` for stateless mode (no interrupt support) or an `InMemorySaver` for stateful mode with interrupt/resume.
+- **include_triage** -- when `True`, a triage node is inserted between prepare and the fan-out, with conditional routing via `Send` objects.
+
+The three compiled graphs are **module-level singletons** -- built once at import time, reused for every request.
+
+| Graph | Checkpointer | Triage | Used by |
+|---|---|---|---|
+| stateless_graph | None | No | /api/analyze |
+| graph | InMemorySaver | No | /api/queue |
+| event_graph | InMemorySaver | Yes | /api/events/webhook, simulator |
+
+### Topology -- stateful graph without triage
 
 ```shell
-START → prepare → ┌─ compliance  ─┐
-                   ├─ security    ─┤ → moderator → END
-                   └─ engineering ─┘
+START -> prepare -> +-  compliance  -+                   +-> post_decision -> END
+                    +-- security   --+ -> moderator -> await_decision
+                    +-- engineering -+
 ```
 
-This is called a **fan-out / fan-in** pattern:
+This is called a **fan-out / fan-in** pattern with an **interrupt point**:
 
 1. **Fan-out**: The `prepare` node has three outgoing edges. LangGraph sees that `compliance`, `security`, and `engineering` are all reachable from `prepare` with no dependencies between them, so it dispatches all three **concurrently**.
 
-2. **Fan-in**: The `moderator` node has three incoming edges. LangGraph waits for **all three** agents to complete before executing the moderator. This is implicit — you don't write any join logic.
+2. **Fan-in**: The `moderator` node has three incoming edges. LangGraph waits for **all three** agents to complete before executing the moderator. This is implicit -- you don't write any join logic.
+
+3. **Interrupt**: After the moderator, `await_decision` calls `interrupt` to pause the graph. The RM submits a decision, and the graph resumes through `post_decision` to END.
 
 The key insight: **edges define parallelism**. If node A has edges to B and C, and B and C have no edge between them, LangGraph runs B and C in parallel. The moderator's three incoming edges create an automatic barrier (join point).
+
+### Topology -- event graph with triage
+
+```shell
+START -> prepare -> triage -> (conditional)
+    respond:  [compliance | security | engineering] -> moderator -> await_decision -> post_decision -> END
+    notify:   notify_rm -> END
+    ignore:   END
+```
+
+The triage node classifies each event as respond, notify, or ignore. When the classification is "respond", the `triage_edge` function returns a list of `Send` objects that fan out to the three agent nodes -- the same fan-out/fan-in pattern as above. For "notify", it routes to a lightweight notification node. For "ignore", it routes directly to END.
 
 ---
 
@@ -103,6 +147,15 @@ class SwarmState(TypedDict):
 
     # Set by the moderator node (fan-in)
     moderator_synthesis: ModeratorSynthesis | None
+
+    # RM decision — populated by Command(resume=) after interrupt
+    decision: dict | None
+
+    # Memory update proposal from post_decision node
+    memory_update_proposal: dict | None
+
+    # Triage classification — respond, notify, or ignore
+    triage_result: str | None
 ```
 
 ### The state reducer pattern
@@ -117,9 +170,9 @@ analyses: Annotated[list[AgentAnalysis], operator.add]
 
 tells LangGraph: *when merging updates to this field, use `operator.add` (list concatenation) instead of replacement*. So:
 
-1. Compliance returns `{"analyses": [compliance_result]}`
-2. Security returns `{"analyses": [security_result]}`
-3. Engineering returns `{"analyses": [engineering_result]}`
+1. Compliance returns a dict with `analyses` containing its result
+2. Security returns a dict with `analyses` containing its result
+3. Engineering returns a dict with `analyses` containing its result
 
 LangGraph concatenates all three → `analyses = [compliance_result, security_result, engineering_result]`
 
@@ -242,7 +295,7 @@ async def compliance_agent(state: SwarmState) -> dict:
 3. **Tool loop** — The LLM calls domain tools to gather evidence (sanctions checks, IP lookups, etc.)
 4. **Structured extraction** — A final LLM call with all evidence produces a validated `AgentAnalysis`
 5. **Role tagging** — `agent_role` is set explicitly in code (not trusting LLM self-identification)
-6. **State update** — Returns `{"analyses": [result]}` for the `operator.add` reducer
+6. **State update** — Returns a dict with `analyses` list for the `operator.add` reducer
 
 ### Why all agents are identical in structure
 
@@ -497,17 +550,36 @@ The LLM receives:
 
 ## Execution modes
 
-The graph supports two execution modes, exposed through two API endpoints.
+The graph supports three execution modes, each backed by a different compiled graph.
 
-### Synchronous (`POST /api/analyze`)
+### Stateless analysis
+
+The stateless_graph has no checkpointer and no interrupt support. It runs the entire pipeline to completion in a single call:
 
 ```python
-result = await graph.ainvoke(build_input(req))
+result = await stateless_graph.ainvoke(build_input(req))
 ```
 
-`ainvoke()` runs the entire graph to completion and returns the final state. The response includes all three agent analyses and the moderator synthesis in a single JSON payload.
+`ainvoke` runs the graph from START to END and returns the final state. The response includes all three agent analyses and the moderator synthesis in a single JSON payload. Used by the /api/analyze endpoint.
 
-### Streaming (`POST /api/analyze/stream`)
+### Stateful with interrupt
+
+The stateful graph has an InMemorySaver checkpointer and pauses at await_decision for RM input:
+
+```python
+# Initial run — pauses at await_decision
+thread_id = str(uuid.uuid4())
+config = {"configurable": {"thread_id": thread_id}}
+result = await graph.ainvoke(build_input(req), config=config)
+
+# Later — RM submits decision, graph resumes
+from langgraph.types import Command
+await graph.ainvoke(Command(resume=decision_payload), config=config)
+```
+
+The thread_id links the initial run to the resume call. A ThreadStore maps conversation_id to thread_id so the decision API can look up the correct thread. Used by the /api/queue endpoint.
+
+### Streaming
 
 ```python
 async for event in graph.astream(build_input(req), stream_mode="updates"):
@@ -601,36 +673,46 @@ All field names are converted to camelCase via Pydantic aliases so the JSON matc
 Here's what happens when you submit a wire transfer scenario, from HTTP request to rendered UI:
 
 ```shell
-1. POST /api/queue {"scenario": "wire_transfer"}
-      |
-2.    v Look up scenario -> AnalyzeRequest object
-      |
-3.    v build_input(req) -> SwarmState dict
-      |
-4.    v graph.ainvoke(state)
-      |
-5.    +-> prepare_context()     -> {} (passthrough)
-      |
-6.    +-> compliance_agent()    -+
-      +-> security_agent()      -+ (parallel, each runs tool loop)
-      +-> engineering_agent()   -+
-      |         |  (tools: sanctions, IP reputation, SDK checks, etc.)
-      |         v operator.add merges analyses
-      |
-7.    v moderator_node()        -> ModeratorSynthesis
-      |
-8.    v build_conversation(req, analyses, synthesis)
-      |         -> ConversationRecord (UUID, camelCase)
-      |
-9.    v conversation_store.save(record)
-      |
-10.   v Return ConversationRecord as JSON
-      |
-11.   v Frontend polls GET /api/conversations (every 3s)
-      |         -> Sees new conversation in list
-      |
-12.   v User clicks conversation in sidebar
-              -> Sees agent analyses, moderator summary, action buttons
+1.  POST /api/queue {"scenario": "wire_transfer"}
+       |
+2.     v Look up scenario -> AnalyzeRequest object
+       |
+3.     v build_input(req) -> SwarmState dict
+       |
+4.     v graph.ainvoke(state, config={"configurable": {"thread_id": tid}})
+       |
+5.     +-> prepare_context()     -> fetches client memory from memory store
+       |
+6.     +-> compliance_agent()    -+
+       +-> security_agent()      -+ (parallel, each runs tool loop)
+       +-> engineering_agent()   -+
+       |         |  (tools: sanctions, IP reputation, SDK checks, etc.)
+       |         v operator.add merges analyses
+       |
+7.     v moderator_node()        -> ModeratorSynthesis with action items
+       |
+8.     v await_decision()        -> calls interrupt(), graph pauses
+       |
+9.     v build_conversation(req, analyses, synthesis)
+       |         -> ConversationRecord (status: "awaiting_decision")
+       |
+10.    v conversation_store.save(record) + thread_store.set(id, tid)
+       |
+11.    v Return ConversationRecord as JSON
+       |
+12.    v Frontend polls GET /api/conversations (every 5s)
+       |         -> Sees new conversation with status "awaiting_decision"
+       |
+13.    v RM clicks conversation in sidebar
+       |         -> Sees agent analyses, moderator summary, action buttons
+       |
+14.    v RM submits decision via POST /api/decisions/<id>
+       |         -> API resumes graph: Command(resume=decision_payload)
+       |
+15.    v post_decision()         -> logs decision, proposes memory update via LLM
+       |
+16.    v Conversation status becomes "concluded"
+              -> Frontend shows actioned state
 ```
 
 ### Timing
@@ -648,6 +730,139 @@ A typical request takes **5-15 seconds** end-to-end, depending on LLM latency:
 | Response serialization | < 1ms |
 
 The agents run in parallel, so the total agent time is the **slowest** agent, not the sum of all three. Each agent typically makes 1-3 tool calls before extraction, adding 2-5 LLM round trips per agent.
+
+---
+
+## Interrupt and resume pattern
+
+The await_decision node is the key mechanism for human-in-the-loop control. When the moderator finishes synthesizing agent analyses, the graph does not proceed to END. Instead, it pauses and waits for an RM decision.
+
+### How interrupt works
+
+The await_decision node calls `interrupt` from `langgraph.types`, passing the action item data from the moderator synthesis as context:
+
+```python
+from langgraph.types import interrupt
+
+async def await_decision(state: SwarmState) -> dict:
+    synthesis = state["moderator_synthesis"]
+    decision = interrupt({
+        "action_items": [item.model_dump() for item in synthesis.action_items],
+        "status": synthesis.status,
+        "risk_level": synthesis.risk_level,
+    })
+    return {"decision": decision}
+```
+
+When `interrupt` is called, LangGraph saves the current graph state to the checkpointer and returns control to the caller. The graph is now **suspended** -- it will not proceed until explicitly resumed.
+
+### How resume works
+
+The decision API endpoint resumes the graph by looking up the thread_id and invoking the graph with a Command:
+
+```python
+from langgraph.types import Command
+
+thread_id = thread_store.get(conversation_id)
+config = {"configurable": {"thread_id": thread_id}}
+decision_payload = {"action": "approve", "option_id": "opt-1", "justification": "..."}
+await graph.ainvoke(Command(resume=decision_payload), config=config)
+```
+
+The `Command(resume=...)` value becomes the return value of the `interrupt` call inside await_decision. The node then returns the decision in state, and execution continues to post_decision and then to END.
+
+### ThreadStore mapping
+
+A ThreadStore singleton maps conversation_id to thread_id. This is necessary because the conversation_id is a SwarmOps concept (used in the API and frontend), while the thread_id is a LangGraph concept (used by the checkpointer). The mapping is set when the initial graph run is submitted and looked up when the RM submits a decision.
+
+---
+
+## Triage classification
+
+The event graph includes a triage node that classifies incoming events before deciding whether to run the full agent pipeline.
+
+### TriageResult schema
+
+The triage node uses structured LLM output to produce a classification:
+
+```python
+class TriageClassification(str, Enum):
+    respond = "respond"
+    notify = "notify"
+    ignore = "ignore"
+
+class TriageResult(BaseModel):
+    classification: TriageClassification  # respond, notify, or ignore
+    reasoning: str  # brief explanation
+```
+
+### Conditional routing with Send
+
+The triage_edge function inspects the classification and returns either a list of Send objects (for fan-out) or a string (for single-node routing):
+
+```python
+def triage_edge(state: SwarmState) -> Union[str, list[Send]]:
+    classification = state.get("triage_result", "respond")
+    if classification == "respond":
+        return [
+            Send("compliance", state),
+            Send("security", state),
+            Send("engineering", state),
+        ]
+    elif classification == "notify":
+        return "notify_rm"
+    else:  # ignore
+        return "__end__"
+```
+
+When the classification is "respond", the `Send` objects trigger the same fan-out pattern as the non-triage graph -- three agents run in parallel, fan in to the moderator, and proceed through the decision flow. For "notify", a lightweight notify_rm node logs the event for the RM without running any agents. For "ignore", the graph routes directly to END.
+
+---
+
+## Client memory
+
+Each client has a dedicated memory store that accumulates learned behaviours over time. Memory provides context to agents so they can distinguish between anomalous and expected activity.
+
+### Prepare node reads memory
+
+The prepare_context node runs before the agent fan-out. It looks up the client name in the ClientMemoryStore and injects any stored memory into the graph state:
+
+```python
+async def prepare_context(state: SwarmState) -> dict:
+    stored_memory = memory_store.get_memory(state["client_name"])
+    if stored_memory:
+        request_memory = state.get("client_memory", "")
+        if request_memory:
+            combined = request_memory + "\n\n---\n\n**Stored Memory:**\n" + stored_memory
+        else:
+            combined = stored_memory
+        return {"client_memory": combined}
+    return {}
+```
+
+Agents receive this memory as part of the formatted event message and can use it to inform their analysis -- for example, recognising that a velocity spike was previously identified as legitimate payroll processing.
+
+### Post-decision proposes memory updates
+
+After the RM submits a decision, the post_decision node calls an LLM with the full context (event, analyses, synthesis, and decision) to propose a memory update. The prompt template lives in `prompts/memory_update.md`. The proposal is saved as pending in the ClientMemoryStore:
+
+```python
+proposal_id = memory_store.propose_update(
+    client_name=state["client_name"],
+    proposed_content=proposed_content,
+)
+return {"memory_update_proposal": {"proposal_id": proposal_id, "content": proposed_content}}
+```
+
+### Approval workflow
+
+Memory updates are never applied automatically. The RM reviews pending proposals via the /api/memory endpoints:
+
+1. **List pending** -- GET /api/memory/pending returns all unapproved proposals
+2. **Approve** -- POST to the approve endpoint merges the proposed content into the client's memory
+3. **Reject** -- POST to the reject endpoint discards the proposal
+
+This human-in-the-loop design ensures that the memory store remains accurate. Agents propose; humans decide.
 
 ---
 
@@ -756,28 +971,40 @@ That's it. The moderator automatically receives the legal analysis because it re
 
 | File | Purpose |
 |---|---|
-| `backend/app/agents/orchestrator.py` | Graph definition and compilation |
-| `backend/app/agents/state.py` | `SwarmState` TypedDict with reducer |
-| `backend/app/agents/schemas.py` | `AgentAnalysis`, `ModeratorSynthesis`, `ActionItem` |
-| `backend/app/agents/llm.py` | Cached `ChatBedrockConverse` with adaptive retry |
-| `backend/app/agents/tool_loop.py` | Shared `run_agent_with_tools()` — two-phase tool loop + structured extraction |
-| `backend/app/agents/scenarios.py` | 4 pre-built `AnalyzeRequest` objects |
-| `backend/app/agents/tools/__init__.py` | `TOOLS_BY_DOMAIN` registry |
+| `backend/app/agents/orchestrator.py` | build_graph with 3 variants -- stateless, stateful, event |
+| `backend/app/agents/state.py` | SwarmState TypedDict with reducer, decision, memory, and triage fields |
+| `backend/app/agents/schemas.py` | AgentAnalysis, ModeratorSynthesis, ActionItem |
+| `backend/app/agents/llm.py` | Cached ChatBedrockConverse with adaptive retry |
+| `backend/app/agents/tool_loop.py` | Shared run_agent_with_tools -- two-phase tool loop + structured extraction |
+| `backend/app/agents/scenarios.py` | 4 pre-built AnalyzeRequest objects |
+| `backend/app/agents/tools/__init__.py` | TOOLS_BY_DOMAIN registry |
 | `backend/app/agents/tools/compliance_tools.py` | Sanctions, transaction history, regulatory thresholds |
 | `backend/app/agents/tools/security_tools.py` | IP reputation, geo-velocity, device fingerprints |
 | `backend/app/agents/tools/engineering_tools.py` | SDK versions, rate limits, metadata validation |
-| `backend/app/agents/nodes/prepare.py` | Context preparation (passthrough stub) |
+| `backend/app/agents/nodes/prepare.py` | Fetches client memory from memory store before analysis |
 | `backend/app/agents/nodes/compliance.py` | Compliance deep agent node (delegates to tool loop) |
 | `backend/app/agents/nodes/security.py` | Security deep agent node (delegates to tool loop) |
 | `backend/app/agents/nodes/engineering.py` | Engineering deep agent node (delegates to tool loop) |
 | `backend/app/agents/nodes/moderator.py` | Moderator synthesis node (single structured output call) |
+| `backend/app/agents/nodes/await_decision.py` | Calls interrupt to pause graph for RM decision |
+| `backend/app/agents/nodes/post_decision.py` | Records decision, proposes memory updates via LLM |
+| `backend/app/agents/nodes/triage.py` | Triage router -- classifies events as respond, notify, or ignore |
+| `backend/app/agents/nodes/notify.py` | Lightweight RM notification for triaged events |
 | `backend/app/agents/prompts/compliance.md` | Compliance domain prompt (includes Available Tools) |
 | `backend/app/agents/prompts/security.md` | Security domain prompt (includes Available Tools) |
 | `backend/app/agents/prompts/engineering.md` | Engineering domain prompt (includes Available Tools) |
 | `backend/app/agents/prompts/moderator.md` | Moderator synthesis prompt |
-| `backend/app/api/conversations.py` | `/api/analyze` and `/api/analyze/stream` |
-| `backend/app/api/queue.py` | `/api/queue` (sync + stream) |
-| `backend/app/api/history.py` | `/api/conversations` (list, get, clear) |
-| `backend/app/services/store.py` | In-memory conversation store |
-| `backend/app/services/conversation_builder.py` | Graph output → frontend shape |
+| `backend/app/agents/prompts/triage.md` | Triage classification prompt |
+| `backend/app/agents/prompts/memory_update.md` | Memory update proposal prompt |
+| `backend/app/api/conversations.py` | /api/analyze and /api/analyze/stream |
+| `backend/app/api/queue.py` | /api/queue (sync + stream) |
+| `backend/app/api/history.py` | /api/conversations (list, get, clear) |
+| `backend/app/api/decisions.py` | /api/decisions -- RM submits decision, resumes interrupted graph |
+| `backend/app/api/memory.py` | /api/memory -- client memory CRUD and pending update approval |
+| `backend/app/api/events.py` | /api/events -- webhook ingestion and simulator control |
+| `backend/app/schemas/conversations.py` | ConversationRecord and nested models with camelCase aliases |
+| `backend/app/services/store.py` | InMemoryConversationStore + ThreadStore singletons |
+| `backend/app/services/conversation_builder.py` | Graph output to frontend shape |
+| `backend/app/services/memory_store.py` | ClientMemoryStore -- per-client memory with pending update approval |
+| `backend/app/services/event_source.py` | EventSimulator -- generates random events on a timer |
 | `backend/app/core/config.py` | Settings (Bedrock, CORS, LLM params) |

@@ -1,6 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
-import type { Conversation, ViewMode, AgentRole } from '../../types';
+import { useState, useEffect } from 'react';
+import type { ViewMode, AgentRole } from '../../types';
+import { useConversations } from '../../hooks/useConversations';
+import { useDecision } from '../../hooks/useDecision';
 import QueueList from '../sidebar/QueueList';
+import ScenarioPanel from '../ScenarioPanel';
 import ConversationHeader from '../conversation/ConversationHeader';
 import MessageList from '../conversation/MessageList';
 import ModeratorSummary from '../conversation/ModeratorSummary';
@@ -8,36 +11,22 @@ import ActionBar from '../conversation/ActionBar';
 import MemoryDrawer from '../memory/MemoryDrawer';
 import AgentIcon from '../shared/AgentIcon';
 
-const API_POLL_INTERVAL = 3000;
-
 export default function AppShell() {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const { data: conversations = [] } = useConversations();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('full');
   const [memoryOpen, setMemoryOpen] = useState(false);
-  const [actionedMap, setActionedMap] = useState<Record<string, string>>({});
+  const decisionMutation = useDecision();
 
-  const fetchConversations = useCallback(async () => {
-    try {
-      const resp = await fetch('/api/conversations');
-      if (!resp.ok) return;
-      const data: Conversation[] = await resp.json();
-      setConversations(data);
-      setSelectedId((prev) => {
-        if (data.length === 0) return null;
-        if (!prev || !data.find((c) => c.id === prev)) return data[0].id;
-        return prev;
-      });
-    } catch {
-      // API not available
-    }
-  }, []);
-
+  // Auto-select first conversation if none selected
   useEffect(() => {
-    fetchConversations();
-    const interval = setInterval(fetchConversations, API_POLL_INTERVAL);
-    return () => clearInterval(interval);
-  }, [fetchConversations]);
+    if (conversations.length > 0 && (!selectedId || !conversations.find((c) => c.id === selectedId))) {
+      setSelectedId(conversations[0].id);
+    }
+    if (conversations.length === 0) {
+      setSelectedId(null);
+    }
+  }, [conversations, selectedId]);
 
   const conversation = selectedId ? conversations.find((c) => c.id === selectedId) : null;
 
@@ -46,11 +35,22 @@ export default function AppShell() {
     setMemoryOpen(false);
   };
 
-  const handleAction = (optionId: string) => {
-    if (selectedId) {
-      setActionedMap((prev) => ({ ...prev, [selectedId]: optionId }));
-    }
+  const handleAction = (optionId: string, justification?: string) => {
+    if (!selectedId || !conversation) return;
+
+    const option = conversation.actionRequired.options.find((o) => o.id === optionId);
+    const action = option?.variant === 'danger' ? 'escalate' : option?.variant === 'primary' ? 'approve' : 'reject';
+
+    decisionMutation.mutate({
+      conversationId: selectedId,
+      optionId,
+      action,
+      justification: justification || '',
+    });
   };
+
+  const isActioned = conversation?.status === 'concluded';
+  const actionedOptionId = conversation?.actionRequired?.actionedOption || undefined;
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -64,9 +64,10 @@ export default function AppShell() {
         <QueueList
           conversations={conversations}
           selectedId={selectedId}
-          actionedMap={actionedMap}
           onSelect={handleSelectConversation}
         />
+
+        <ScenarioPanel />
 
         <div className="px-5 py-3 border-t border-gray-800">
           <p className="text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
@@ -127,11 +128,12 @@ export default function AppShell() {
 
             <ActionBar
               options={conversation.actionRequired.options}
-              isActioned={!!actionedMap[selectedId!]}
-              actionedOptionId={actionedMap[selectedId!]}
+              isActioned={isActioned}
+              actionedOptionId={actionedOptionId}
               onAction={handleAction}
               memoryOpen={memoryOpen}
               onToggleMemory={() => setMemoryOpen((prev) => !prev)}
+              isPending={decisionMutation.isPending}
             />
           </>
         ) : (
@@ -139,12 +141,8 @@ export default function AppShell() {
             <div className="text-center">
               <p className="text-lg font-medium text-gray-400">No events in queue</p>
               <p className="text-sm text-gray-300 mt-1">
-                Submit a scenario via the API to get started
+                Use the sidebar to submit a scenario
               </p>
-              <code className="block mt-4 text-xs text-gray-400 bg-gray-100 rounded-lg px-4 py-3">
-                curl -X POST /api/queue -H &quot;Content-Type: application/json&quot; -d
-                &#123;&quot;scenario&quot;:&quot;wire_transfer&quot;&#125;
-              </code>
             </div>
           </div>
         )}

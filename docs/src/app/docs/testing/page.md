@@ -24,12 +24,15 @@ uv run pytest tests/test_tool_agents.py -v
 
 ## Test structure
 
-Tests are spread across four files (69 tests total):
+Tests are spread across seven files (104 tests total):
 
-- `backend/tests/test_orchestrator.py` — Graph topology, mocked LLM execution, API response (6 tests)
+- `backend/tests/test_orchestrator.py` — Graph topology, mocked LLM execution, API response (7 tests)
 - `backend/tests/test_queue.py` — Scenario registry and queue endpoint tests (11 tests)
 - `backend/tests/test_conversations.py` — Store, builder, history endpoints, camelCase serialization (18 tests)
 - `backend/tests/test_tool_agents.py` — Tool unit tests, tool loop tests, full graph integration with tools (34 tests)
+- `backend/tests/test_decisions.py` — Decision endpoint, interrupt/resume flow, graph state tests (7 tests)
+- `backend/tests/test_memory.py` — Memory store, prepare node, memory API endpoints (18 tests)
+- `backend/tests/test_triage.py` — Triage classification, event graph, webhook, simulator (11 tests)
 
 ### test_orchestrator.py
 
@@ -291,6 +294,71 @@ class TestQueueEndpoints:
 
 ---
 
+### test_decisions.py
+
+Tests the RM decision flow — interrupt, resume, and state transitions:
+
+```python
+class TestDecisions:
+    async def test_full_decision_flow(self): ...
+    async def test_queue_returns_awaiting_decision(self): ...
+    async def test_nonexistent_conversation_returns_404(self): ...
+    async def test_already_concluded_returns_400(self): ...
+    async def test_conversation_shows_decision(self): ...
+    async def test_stateless_graph_still_works(self): ...
+```
+
+---
+
+### test_memory.py
+
+Tests per-client memory storage, prepare node integration, and API endpoints:
+
+```python
+class TestClientMemoryStore:
+    def test_get_empty_memory(self): ...
+    def test_propose_and_approve(self): ...
+    def test_propose_and_reject(self): ...
+    def test_list_pending(self): ...
+    def test_approve_nonexistent(self): ...
+
+class TestPrepareWithMemory:
+    async def test_prepare_injects_stored_memory(self): ...
+    async def test_prepare_combines_existing_and_stored(self): ...
+    async def test_prepare_no_stored_memory(self): ...
+
+class TestMemoryEndpoints:
+    async def test_get_memory(self): ...
+    async def test_get_pending(self): ...
+    async def test_approve_proposal(self): ...
+    async def test_reject_proposal(self): ...
+```
+
+---
+
+### test_triage.py
+
+Tests the triage router, event graph variants, and event endpoints:
+
+```python
+class TestTriageEdge:
+    def test_respond_returns_send_list(self): ...
+    def test_notify_returns_string(self): ...
+    def test_ignore_returns_end(self): ...
+    def test_default_is_respond(self): ...
+
+class TestEventGraph:
+    async def test_event_graph_respond(self): ...
+    async def test_event_graph_ignore(self): ...
+    async def test_event_graph_notify(self): ...
+
+class TestEventEndpoints:
+    async def test_webhook(self): ...
+    async def test_simulator_start_stop(self): ...
+```
+
+---
+
 ## Manual API testing
 
 **File:** `backend/requests.http`
@@ -323,6 +391,23 @@ An HTTP client file with pre-built test requests:
 16. `GET /api/conversations/{id}` — Get a single conversation by ID
 17. `DELETE /api/conversations` — Clear all persisted conversations
 
+**Decision endpoints:**
+
+18. `POST /api/decisions/{id}` — Submit RM decision (approve/reject/escalate)
+
+**Memory endpoints:**
+
+19. `GET /api/memory/{client_name}` — Get client memory
+20. `GET /api/memory/pending` — List pending memory update proposals
+21. `POST /api/memory/pending/{id}/approve` — Approve memory update
+22. `POST /api/memory/pending/{id}/reject` — Reject memory update
+
+**Event endpoints:**
+
+23. `POST /api/events/webhook` — Submit external event with triage
+24. `POST /api/events/simulate/start` — Start event simulator
+25. `POST /api/events/simulate/stop` — Stop event simulator
+
 Use with VS Code REST Client extension or IntelliJ HTTP Client.
 
 ---
@@ -347,5 +432,8 @@ def _sample_input() -> dict:
         "client_memory": "Known client since 2019. Regular EU transfers.",
         "analyses": [],
         "moderator_synthesis": None,
+        "decision": None,
+        "memory_update_proposal": None,
+        "triage_result": None,
     }
 ```

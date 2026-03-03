@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.agents.orchestrator import build_graph, graph
+from app.agents.orchestrator import build_graph, event_graph, graph, stateless_graph
 from app.agents.schemas import ActionItem, AgentAnalysis, ModeratorSynthesis
 from app.agents.state import SwarmState
 
@@ -29,6 +29,9 @@ def _sample_input() -> dict:
         "client_memory": "Known client since 2019. Regular EU transfers for trade finance.",
         "analyses": [],
         "moderator_synthesis": None,
+        "decision": None,
+        "memory_update_proposal": None,
+        "triage_result": None,
     }
 
 
@@ -99,15 +102,22 @@ class TestGraphTopology:
         assert g is not None
 
     def test_graph_has_expected_nodes(self):
-        """All 5 nodes are present."""
+        """All 7 nodes are present (including await_decision and post_decision)."""
         node_names = set(graph.nodes.keys())
-        expected = {"prepare", "compliance", "security", "engineering", "moderator", "__start__"}
+        expected = {"prepare", "compliance", "security", "engineering", "moderator",
+                    "await_decision", "post_decision", "__start__"}
         assert expected.issubset(node_names), f"Missing nodes: {expected - node_names}"
 
     def test_singleton_graph_matches_builder(self):
-        """Module-level graph is the same structure as build_graph()."""
-        fresh = build_graph()
+        """Module-level graphs have expected structure."""
+        fresh = build_graph(include_triage=False)
         assert set(fresh.nodes.keys()) == set(graph.nodes.keys())
+
+    def test_event_graph_has_triage_nodes(self):
+        """Event graph includes triage and notify_rm nodes."""
+        node_names = set(event_graph.nodes.keys())
+        assert "triage" in node_names
+        assert "notify_rm" in node_names
 
 
 # --- Full Run Tests (mocked LLM) ---
@@ -121,7 +131,7 @@ class TestGraphExecution:
 
         with patch("app.agents.tool_loop.get_llm", return_value=mock_llm), \
              patch("app.agents.nodes.moderator.get_llm", return_value=mock_llm):
-            result = await graph.ainvoke(_sample_input())
+            result = await stateless_graph.ainvoke(_sample_input())
 
         # Verify 3 analyses accumulated
         assert len(result["analyses"]) == 3
@@ -142,7 +152,7 @@ class TestGraphExecution:
 
         with patch("app.agents.tool_loop.get_llm", return_value=mock_llm), \
              patch("app.agents.nodes.moderator.get_llm", return_value=mock_llm):
-            result = await graph.ainvoke(_sample_input())
+            result = await stateless_graph.ainvoke(_sample_input())
 
         for analysis in result["analyses"]:
             assert analysis.agent_role in ("compliance", "security", "engineering")

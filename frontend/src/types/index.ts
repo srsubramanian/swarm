@@ -47,6 +47,20 @@ export interface ModeratorSummaryData {
   nextSteps: string[];
 }
 
+export interface DecisionPayload {
+  optionId: string;
+  action: 'approve' | 'reject' | 'escalate' | 'override';
+  justification: string;
+}
+
+export interface DecisionRecord {
+  optionId: string;
+  action: string;
+  justification: string;
+  decidedBy: string;
+  decidedAt: string | null;
+}
+
 export interface Conversation {
   id: string;
   title: string;
@@ -61,4 +75,17 @@ export interface Conversation {
   moderatorSummary: ModeratorSummaryData;
   actionRequired: ActionRequired;
   clientMemory: ClientMemory;
+  decision?: DecisionRecord | null;
+}
+
+export interface Scenario {
+  name: string;
+  title: string;
+  clientName: string;
+  eventType: string;
+}
+
+export interface SSEEvent {
+  event: string;
+  data: string;
 }

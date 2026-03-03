@@ -8,44 +8,62 @@ SwarmOps uses LangGraph's `StateGraph` to orchestrate three domain agents in a f
 
 ## LangGraph StateGraph
 
-The orchestrator is defined in `backend/app/agents/orchestrator.py`:
+The orchestrator is defined in `backend/app/agents/orchestrator.py`. It supports three graph variants via a parameterized `build_graph()` function:
 
 ```python
 from langgraph.graph import END, START, StateGraph
+from langgraph.checkpoint.memory import InMemorySaver
 
-def build_graph() -> StateGraph:
+_saver = InMemorySaver()
+
+def build_graph(checkpointer=_saver, include_triage=False):
     builder = StateGraph(SwarmState)
 
-    # Add nodes
+    # Core nodes
     builder.add_node("prepare", prepare_context)
     builder.add_node("compliance", compliance_agent)
     builder.add_node("security", security_agent)
     builder.add_node("engineering", engineering_agent)
     builder.add_node("moderator", moderator_node)
+    builder.add_node("await_decision", await_decision)
+    builder.add_node("post_decision", post_decision)
 
-    # START → prepare
     builder.add_edge(START, "prepare")
 
-    # Fan-out: prepare → 3 agents in parallel
-    builder.add_edge("prepare", "compliance")
-    builder.add_edge("prepare", "security")
-    builder.add_edge("prepare", "engineering")
+    if include_triage:
+        builder.add_node("triage", triage_router)
+        builder.add_node("notify_rm", notify_rm_node)
+        builder.add_edge("prepare", "triage")
+        builder.add_conditional_edges("triage", triage_edge)
+    else:
+        # Direct fan-out from prepare
+        builder.add_edge("prepare", "compliance")
+        builder.add_edge("prepare", "security")
+        builder.add_edge("prepare", "engineering")
 
-    # Fan-in: all agents → moderator
+    # Fan-in + decision pipeline
     builder.add_edge("compliance", "moderator")
     builder.add_edge("security", "moderator")
     builder.add_edge("engineering", "moderator")
+    builder.add_edge("moderator", "await_decision")
+    builder.add_edge("await_decision", "post_decision")
+    builder.add_edge("post_decision", END)
 
-    # moderator → END
-    builder.add_edge("moderator", END)
+    return builder.compile(checkpointer=checkpointer)
 
-    return builder.compile()
-
-# Module-level singleton
-graph = build_graph()
+# Three graph variants
+graph = build_graph(checkpointer=_saver, include_triage=False)
+stateless_graph = build_graph(checkpointer=None, include_triage=False)
+event_graph = build_graph(checkpointer=_saver, include_triage=True)
 ```
 
-The graph is compiled once at import time and reused across all requests.
+Each variant is compiled once at import time and reused across all requests.
+
+| Graph | Checkpointer | Triage | Used by |
+|-------|-------------|--------|---------|
+| `stateless_graph` | None | No | `/api/analyze` (stateless) |
+| `graph` | `InMemorySaver` | No | `/api/queue` (interrupt/resume) |
+| `event_graph` | `InMemorySaver` | Yes | `/api/events/webhook`, simulator |
 
 ---
 
@@ -83,9 +101,18 @@ class SwarmState(TypedDict):
 
     # Set by moderator
     moderator_synthesis: ModeratorSynthesis | None
+
+    # RM decision (populated by Command(resume=) after interrupt)
+    decision: dict | None
+
+    # Memory update proposal from post_decision
+    memory_update_proposal: dict | None
+
+    # Triage classification ("respond" | "notify" | "ignore")
+    triage_result: str | None
 ```
 
-Agents read from the input fields and write to `analyses`. The moderator reads `analyses` and writes `moderator_synthesis`.
+Agents read from the input fields and write to `analyses`. The moderator reads `analyses` and writes `moderator_synthesis`. The `await_decision` node pauses the graph and receives the RM's decision via `Command(resume=)`. The `post_decision` node reads the decision and proposes memory updates.
 
 ---
 

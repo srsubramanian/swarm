@@ -160,6 +160,32 @@ interface ModeratorSummaryData {
   nextSteps: string[];
 }
 
+interface DecisionPayload {
+  conversationId: string;
+  optionId: string;
+  action: string;
+  justification: string;
+}
+
+interface DecisionRecord {
+  optionId: string;
+  action: string;
+  justification: string;
+  decidedAt: string;
+}
+
+interface Scenario {
+  name: string;
+  title: string;
+  client_name: string;
+  event_type: string;
+}
+
+interface SSEEvent {
+  event: string;
+  data: Record<string, unknown>;
+}
+
 interface Conversation {
   id: string;
   title: string;
@@ -167,11 +193,14 @@ interface Conversation {
   riskLevel: RiskLevel;
   status: ConversationStatus;
   eventType: string;
+  startedAt: string;
+  messageCount: number;
   agents: AgentInfo[];
   messages: Message[];
   moderatorSummary: ModeratorSummaryData;
   actionRequired: ActionRequired;
   clientMemory: ClientMemory;
+  decision?: DecisionRecord | null;
 }
 ```
 
@@ -193,7 +222,7 @@ class ConversationRecord(_CamelModel):
     title: str
     client_name: str         # → clientName in JSON
     risk_level: str          # → riskLevel
-    status: str              # "awaiting_decision"
+    status: str              # "awaiting_decision" | "concluded"
     event_type: str          # → eventType
     started_at: str          # → startedAt (ISO 8601 UTC)
     message_count: int       # → messageCount
@@ -202,6 +231,19 @@ class ConversationRecord(_CamelModel):
     moderator_summary: ModeratorSummaryRecord    # → moderatorSummary
     action_required: ActionRequiredRecord        # → actionRequired
     client_memory: ClientMemoryRecord            # → clientMemory
+    decision: DecisionRecord | None = None       # → decision (after RM acts)
+```
+
+### DecisionRecord
+
+Added to `ConversationRecord` after an RM decision:
+
+```python
+class DecisionRecord(_CamelModel):
+    option_id: str         # → optionId
+    action: str            # "approve" | "reject" | "escalate"
+    justification: str
+    decided_at: str        # → decidedAt (ISO 8601 UTC)
 ```
 
 ### AgentInfoRecord

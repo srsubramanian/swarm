@@ -8,6 +8,21 @@ interface ConversationHeaderProps {
   onViewModeChange: (mode: ViewMode) => void;
 }
 
+const statusConfig: Record<string, { label: string; classes: string }> = {
+  live: {
+    label: 'Live',
+    classes: 'bg-green-50 text-green-700 ring-green-600/20',
+  },
+  awaiting_decision: {
+    label: 'Awaiting Decision',
+    classes: 'bg-blue-50 text-blue-700 ring-blue-600/20',
+  },
+  concluded: {
+    label: 'Concluded',
+    classes: 'bg-gray-50 text-gray-600 ring-gray-500/20',
+  },
+};
+
 export default function ConversationHeader({
   conversation,
   viewMode,
@@ -18,6 +33,8 @@ export default function ConversationHeader({
     minute: '2-digit',
   });
 
+  const status = statusConfig[conversation.status] || statusConfig.awaiting_decision;
+
   return (
     <div className="bg-white border-b border-gray-200 px-6 py-4">
       <div className="flex items-start justify-between">
@@ -27,8 +44,8 @@ export default function ConversationHeader({
               {conversation.title}
             </h2>
             <Badge level={conversation.riskLevel} />
-            <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-600/20">
-              Awaiting Decision
+            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${status.classes}`}>
+              {status.label}
             </span>
           </div>
           <div className="flex items-center gap-4 mt-1.5">

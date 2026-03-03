@@ -381,7 +381,7 @@ class TestFullGraphWithTools:
     @pytest.mark.asyncio
     async def test_full_graph_produces_valid_synthesis(self):
         """Full graph with deep agents produces valid moderator synthesis."""
-        from app.agents.orchestrator import graph
+        from app.agents.orchestrator import stateless_graph as graph
 
         def _mock_agent(role: str) -> AgentAnalysis:
             return AgentAnalysis(
@@ -438,6 +438,9 @@ class TestFullGraphWithTools:
             "client_memory": "",
             "analyses": [],
             "moderator_synthesis": None,
+            "decision": None,
+            "memory_update_proposal": None,
+            "triage_result": None,
         }
 
         with patch("app.agents.tool_loop.get_llm", return_value=mock_llm), \

@@ -203,11 +203,21 @@ done
 
 ---
 
+## Decision integration
+
+Queue submissions now use the **stateful graph** with LangGraph checkpointing. The pipeline pauses at the `await_decision` node via `interrupt()`. The conversation is saved with status `awaiting_decision`.
+
+To submit a decision and resume the graph, use the [Decisions API](/docs/api-decisions) (`POST /api/decisions/{conversation_id}`).
+
+Each conversation is assigned a unique `thread_id` for LangGraph checkpointing. The `ThreadStore` maps `conversation_id` → `thread_id` for later resume.
+
+---
+
 ## Implementation
 
 **File:** `backend/app/api/queue.py`
 
-The queue router defines three endpoints that look up scenarios from `backend/app/agents/scenarios.py`, run the LangGraph pipeline directly, and persist results via `InMemoryConversationStore`. The full pipeline (prepare → 3 agents → moderator) is exercised on every request.
+The queue router defines three endpoints that look up scenarios from `backend/app/agents/scenarios.py`, run the LangGraph pipeline with checkpointing, and persist results via `InMemoryConversationStore`. The full pipeline (prepare → 3 agents → moderator → await_decision) is exercised on every request.
 
 **File:** `backend/app/agents/scenarios.py`
 

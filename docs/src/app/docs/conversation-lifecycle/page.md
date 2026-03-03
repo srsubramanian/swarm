@@ -52,8 +52,14 @@ Conversation data is deleted per retention policy. Only aggregate statistics may
 
 ## Current implementation status
 
-{% callout type="warning" title="Partial implementation" %}
-The conversation lifecycle is designed but not yet fully implemented. Currently, the system supports the **Live** and **Awaiting Decision** stages. Queue submissions (`POST /api/queue`) auto-persist as `ConversationRecord` with status `awaiting_decision` in an in-memory store — see the [Conversations API](/docs/api-conversations). Concluded, Indexed, Archived, and Purged stages require the database models and ARQ background tasks that are on the build roadmap.
+The system supports **Live**, **Awaiting Decision**, and **Concluded** stages:
+
+- Queue submissions (`POST /api/queue`) auto-persist as `ConversationRecord` with status `awaiting_decision`
+- RM decisions (`POST /api/decisions/{id}`) transition conversations to `concluded` — see the [Decisions API](/docs/api-decisions)
+- After concluding, the `post_decision` node proposes client memory updates — see the [Memory API](/docs/api-memory)
+
+{% callout type="note" title="Future stages" %}
+The Indexed, Archived, and Purged stages require database models and ARQ background tasks that are on the build roadmap.
 {% /callout %}
 
 ---

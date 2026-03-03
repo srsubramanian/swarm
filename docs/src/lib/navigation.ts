@@ -26,6 +26,9 @@ export const navigation = [
       { title: 'Schemas', href: '/docs/schemas' },
       { title: 'Queue API', href: '/docs/api-queue' },
       { title: 'Conversations API', href: '/docs/api-conversations' },
+      { title: 'Decisions API', href: '/docs/api-decisions' },
+      { title: 'Memory API', href: '/docs/api-memory' },
+      { title: 'Events API', href: '/docs/api-events' },
     ],
   },
   {
@@ -35,6 +38,7 @@ export const navigation = [
       { title: 'Security agent', href: '/docs/agent-security' },
       { title: 'Engineering agent', href: '/docs/agent-engineering' },
       { title: 'Moderator', href: '/docs/moderator' },
+      { title: 'Triage router', href: '/docs/triage' },
       { title: 'Tool use', href: '/docs/tool-use' },
       { title: 'Prompt templates', href: '/docs/prompt-templates' },
     ],
@@ -44,6 +48,7 @@ export const navigation = [
     links: [
       { title: 'Components', href: '/docs/frontend-components' },
       { title: 'Type system', href: '/docs/frontend-types' },
+      { title: 'React Query hooks', href: '/docs/frontend-hooks' },
     ],
   },
   {

@@ -7,7 +7,7 @@ from collections.abc import AsyncGenerator
 from fastapi import APIRouter
 from sse_starlette.sse import EventSourceResponse
 
-from app.agents.orchestrator import graph
+from app.agents.orchestrator import stateless_graph as graph
 from app.agents.schemas import AgentAnalysis, ModeratorSynthesis
 from app.schemas.events import (
     ActionOptionResponse,
@@ -68,6 +68,9 @@ def build_input(req: AnalyzeRequest) -> dict:
         "client_memory": req.client_memory,
         "analyses": [],
         "moderator_synthesis": None,
+        "decision": None,
+        "memory_update_proposal": None,
+        "triage_result": None,
     }
 
 

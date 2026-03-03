@@ -4,17 +4,15 @@ import QueueItem from './QueueItem';
 interface QueueListProps {
   conversations: Conversation[];
   selectedId: string | null;
-  actionedMap: Record<string, string>;
   onSelect: (id: string) => void;
 }
 
 export default function QueueList({
   conversations,
   selectedId,
-  actionedMap,
   onSelect,
 }: QueueListProps) {
-  const pendingCount = conversations.filter((c) => !actionedMap[c.id]).length;
+  const pendingCount = conversations.filter((c) => c.status === 'awaiting_decision').length;
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -34,7 +32,6 @@ export default function QueueList({
             key={conv.id}
             conversation={conv}
             selected={conv.id === selectedId}
-            actioned={!!actionedMap[conv.id]}
             onClick={() => onSelect(conv.id)}
           />
         ))}

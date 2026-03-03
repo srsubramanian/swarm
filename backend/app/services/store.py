@@ -26,4 +26,21 @@ class InMemoryConversationStore:
         return count
 
 
+class ThreadStore:
+    """Maps conversation_id → LangGraph thread_id for resuming interrupted graphs."""
+
+    def __init__(self) -> None:
+        self._data: dict[str, str] = {}
+
+    def set(self, conversation_id: str, thread_id: str) -> None:
+        self._data[conversation_id] = thread_id
+
+    def get(self, conversation_id: str) -> str | None:
+        return self._data.get(conversation_id)
+
+    def clear(self) -> None:
+        self._data.clear()
+
+
 conversation_store = InMemoryConversationStore()
+thread_store = ThreadStore()

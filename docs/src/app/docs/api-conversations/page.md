@@ -108,7 +108,7 @@ class ConversationRecord:
     title: str
     clientName: str
     riskLevel: str             # "critical" | "high" | "medium" | "low"
-    status: str                # "awaiting_decision"
+    status: str                # "awaiting_decision" | "concluded"
     eventType: str
     startedAt: str             # ISO 8601 UTC
     messageCount: int
@@ -117,6 +117,7 @@ class ConversationRecord:
     moderatorSummary: ModeratorSummaryRecord
     actionRequired: ActionRequiredRecord
     clientMemory: ClientMemoryRecord
+    decision: DecisionRecord | None  # Present after RM decision
 ```
 
 ### Nested models
@@ -154,9 +155,18 @@ class ConversationRecord:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `status` | string | "pending" (no RM actions yet) |
+| `status` | string | "pending" or "actioned" |
 | `options` | ActionOptionRecord[] | Available actions |
-| `actionedOption` | string? | null until RM acts |
+| `actionedOption` | string? | null until RM acts, then the selected option ID |
+
+**DecisionRecord** — Present after an RM decision (via [Decisions API](/docs/api-decisions)):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `optionId` | string | Selected action option ID |
+| `action` | string | "approve", "reject", or "escalate" |
+| `justification` | string | RM's rationale (required for escalate) |
+| `decidedAt` | string | ISO 8601 UTC |
 
 **ClientMemoryRecord** — Client context passed to agents:
 

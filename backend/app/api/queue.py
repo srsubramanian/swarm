@@ -1,6 +1,7 @@
 """Queue endpoints — submit pre-built scenarios by name, persist results."""
 
 import json
+import uuid
 from collections.abc import AsyncGenerator
 
 from fastapi import APIRouter, HTTPException
@@ -12,7 +13,7 @@ from app.agents.scenarios import SCENARIOS
 from app.api.conversations import analysis_to_response, build_input, synthesis_to_response
 from app.schemas.conversations import ConversationRecord
 from app.services.conversation_builder import build_conversation
-from app.services.store import conversation_store
+from app.services.store import conversation_store, thread_store
 
 router = APIRouter(prefix="/api/queue", tags=["queue"])
 
@@ -44,7 +45,7 @@ async def list_scenarios() -> list[ScenarioInfo]:
 
 @router.post("", response_model=ConversationRecord)
 async def queue_analyze(body: QueueRequest) -> ConversationRecord:
-    """Submit a scenario by name — runs pipeline, persists, returns conversation."""
+    """Submit a scenario by name — runs pipeline, pauses at interrupt, returns conversation."""
     req = SCENARIOS.get(body.scenario)
     if not req:
         raise HTTPException(
@@ -52,9 +53,16 @@ async def queue_analyze(body: QueueRequest) -> ConversationRecord:
             detail=f"Unknown scenario '{body.scenario}'. Available: {list(SCENARIOS.keys())}",
         )
 
-    result = await graph.ainvoke(build_input(req))
+    thread_id = str(uuid.uuid4())
+    config = {"configurable": {"thread_id": thread_id}}
+    inp = build_input(req)
+
+    # Graph will run until interrupt() in await_decision node
+    result = await graph.ainvoke(inp, config=config)
+
     record = build_conversation(req, result["analyses"], result["moderator_synthesis"])
     conversation_store.save(record)
+    thread_store.set(record.id, thread_id)
     return record
 
 
@@ -68,10 +76,13 @@ async def _queue_event_generator(
 
     yield {"event": "start", "data": json.dumps({"status": "processing"})}
 
+    thread_id = str(uuid.uuid4())
+    config = {"configurable": {"thread_id": thread_id}}
+
     analyses = []
     synthesis = None
 
-    async for event in graph.astream(build_input(req), stream_mode="updates"):
+    async for event in graph.astream(build_input(req), config=config, stream_mode="updates"):
         for node_name, node_output in event.items():
             if node_name in ("compliance", "security", "engineering"):
                 for analysis in node_output.get("analyses", []):
@@ -94,6 +105,7 @@ async def _queue_event_generator(
     if analyses and synthesis:
         record = build_conversation(req, analyses, synthesis)
         conversation_store.save(record)
+        thread_store.set(record.id, thread_id)
         conversation_id = record.id
 
     yield {

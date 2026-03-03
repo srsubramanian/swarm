@@ -10,16 +10,19 @@ SwarmOps follows a simple pipeline: business events enter, three AI agents analy
 
 ```shell
 Event → prepare → ┌─ Compliance ─┐
-                   ├─ Security   ─┤ → Moderator → Action Items → RM Queue → RM Decides
+                   ├─ Security   ─┤ → Moderator → await_decision (pause) → RM Decides → post_decision
                    └─ Engineering ┘
 ```
 
-1. **Event ingestion** — A business event (wire transfer, security alert, velocity trigger) arrives via the `/api/analyze` endpoint
-2. **Prepare** — Context preparation stub (future: client memory lookup, RAG retrieval)
-3. **Fan-out** — Three domain agents run in parallel via LangGraph
-4. **Fan-in** — The moderator receives all three analyses
-5. **Synthesis** — The moderator produces consensus, dissent, risk assessment, and action items
-6. **RM queue** — Action items are routed to the Relationship Manager for a human decision
+1. **Event ingestion** — A business event (wire transfer, security alert, velocity trigger) arrives via `/api/queue` or `/api/events/webhook`
+2. **Prepare** — Client memory lookup from `ClientMemoryStore`, injected into agent context
+3. **Triage** *(event graph only)* — LLM classifies the event as `respond` / `notify` / `ignore`
+4. **Fan-out** — Three domain agents run in parallel via LangGraph
+5. **Fan-in** — The moderator receives all three analyses
+6. **Synthesis** — The moderator produces consensus, dissent, risk assessment, and action items
+7. **Await decision** — Graph pauses via `interrupt()` — conversation saved with status `awaiting_decision`
+8. **RM decides** — RM reviews and submits a decision (approve/reject/escalate) via the Decisions API
+9. **Post-decision** — Graph resumes, records the outcome, proposes client memory updates
 
 ---
 
@@ -29,26 +32,29 @@ Event → prepare → ┌─ Compliance ─┐
 
 The Python backend handles API routing, agent orchestration, and LLM calls:
 
-- **FastAPI app** (`backend/app/main.py`) — CORS, health check, router registration
+- **FastAPI app** (`backend/app/main.py`) — CORS, health check, router registration, lifespan handler
 - **Analyze endpoints** (`backend/app/api/conversations.py`) — Sync and SSE streaming (stateless)
-- **Queue endpoints** (`backend/app/api/queue.py`) — Submit scenarios by name, auto-persist results
+- **Queue endpoints** (`backend/app/api/queue.py`) — Submit scenarios by name, auto-persist results with checkpointing
+- **Decision endpoint** (`backend/app/api/decisions.py`) — RM submits decisions, resumes paused graphs
+- **Memory endpoints** (`backend/app/api/memory.py`) — Per-client memory read/propose/approve/reject
+- **Events endpoints** (`backend/app/api/events.py`) — Webhook ingestion, event simulator start/stop
 - **History endpoints** (`backend/app/api/history.py`) — List, get, and clear persisted conversations
-- **LangGraph orchestrator** (`backend/app/agents/orchestrator.py`) — Graph topology
-- **Agent nodes** (`backend/app/agents/nodes/`) — Compliance, Security, Engineering, Moderator
-- **Prompt templates** (`backend/app/agents/prompts/`) — Version-controlled markdown
-- **Conversation store** (`backend/app/services/store.py`) — In-memory persistence for demo use
+- **LangGraph orchestrator** (`backend/app/agents/orchestrator.py`) — Three graph variants with checkpointing
+- **Agent nodes** (`backend/app/agents/nodes/`) — Compliance, Security, Engineering, Moderator, Triage, Await Decision, Post Decision, Notify
+- **Prompt templates** (`backend/app/agents/prompts/`) — Version-controlled markdown (6 prompts)
+- **Memory store** (`backend/app/services/memory_store.py`) — Per-client memory with pending update approval
+- **Conversation store** (`backend/app/services/store.py`) — In-memory persistence + thread mapping
 
 ### Frontend (React + TypeScript)
 
-The frontend provides the RM console interface:
+The frontend provides the RM console interface, wired to the backend via React Query:
 
-- **Conversation view** — Agent analyses displayed in real-time
-- **Action queue** — Sorted by risk severity
+- **Conversation view** — Agent analyses fetched from API with auto-polling
+- **Action queue** — Sorted by risk severity, status badges (live/awaiting decision/concluded)
+- **Decision UI** — Action buttons with two-step confirmation, justification for danger actions, loading state during mutation
+- **Scenario panel** — Submit pre-built scenarios from the sidebar
 - **Client memory panel** — Per-client context and history
-
-{% callout title="Frontend status" %}
-The frontend UI is fully styled with Tailwind CSS and uses mock data. API integration via React Query is not yet wired up.
-{% /callout %}
+- **React Query hooks** — `useConversations`, `useDecision`, `useScenarios`, `useSSE`
 
 ### Infrastructure
 
@@ -62,10 +68,26 @@ The frontend UI is fully styled with Tailwind CSS and uses mock data. API integr
 
 ## Data flow
 
-### Synchronous (`POST /api/analyze`)
+### Stateless (`POST /api/analyze`)
 
 ```shell
-Client → FastAPI → graph.ainvoke() → [3 agents parallel] → moderator → JSON response
+Client → FastAPI → stateless_graph.ainvoke() → [3 agents parallel] → moderator → JSON response
+```
+
+### Queue with decision pause (`POST /api/queue`)
+
+```shell
+Client → FastAPI → graph.ainvoke() → [3 agents parallel] → moderator → await_decision (interrupt)
+                                                                              ↓
+                                                              POST /api/decisions/{id}
+                                                                              ↓
+                                                              graph.ainvoke(Command(resume=)) → post_decision → JSON response
+```
+
+### Event webhook with triage (`POST /api/events/webhook`)
+
+```shell
+Client → FastAPI → event_graph.ainvoke() → triage → respond/notify/ignore → ...
 ```
 
 ### Streaming (`POST /api/analyze/stream`)

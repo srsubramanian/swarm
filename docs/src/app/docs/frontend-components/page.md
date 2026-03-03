@@ -9,11 +9,21 @@ The SwarmOps frontend is built with React, TypeScript, and Tailwind CSS. Compone
 ## Component structure
 
 ```shell
-frontend/src/components/
-├── conversation/    # Conversation view components
-├── sidebar/         # Navigation sidebar
-├── memory/          # Client memory panel
-└── shared/          # Reusable UI primitives
+frontend/src/
+├── components/
+│   ├── conversation/    # Conversation view components
+│   ├── layout/          # AppShell layout
+│   ├── sidebar/         # Navigation sidebar
+│   ├── memory/          # Client memory panel
+│   ├── shared/          # Reusable UI primitives
+│   └── ScenarioPanel.tsx  # Scenario submission
+├── hooks/               # React Query hooks
+│   ├── useConversations.ts
+│   ├── useConversation.ts
+│   ├── useDecision.ts
+│   ├── useScenarios.ts
+│   └── useSSE.ts
+└── types/               # TypeScript interfaces
 ```
 
 ---
@@ -31,20 +41,22 @@ Displays the agent analyses and moderator synthesis for a single event. Componen
 
 ### Sidebar
 
-- **Conversation list** — All events sorted by risk severity
-- **Status filters** — Live, awaiting decision, concluded
-- **Client grouping** — Events grouped by client name
+- **Queue list** — All conversations with pending count badge
+- **Queue items** — Client name, title, risk badge, agent icons, message count, actioned status
+- **Scenario panel** — Submit pre-built scenarios with loading state
 
 ### Memory panel
 
 - **Client memory viewer** — Displays the per-client markdown memory
 - **Memory edit proposals** — Shows suggested updates from the system (requires RM approval)
 
-### Action queue
+### Action bar
 
 - **Action items** — Buttons styled by variant (primary, secondary, danger)
-- **Two-step confirmation** — Actions require confirmation before executing
-- **Override justification** — Text input required when overriding agent recommendations
+- **Two-step confirmation** — Actions require confirmation click before executing
+- **Justification input** — Text input shown for danger-variant actions
+- **Loading state** — Spinner shown during decision mutation (`isPending`)
+- **Actioned state** — Shows green checkmark with the selected action label
 
 ---
 
@@ -64,17 +76,12 @@ All components use Tailwind CSS utility classes:
 
 ## Data source
 
-{% callout type="warning" title="Using mock data" %}
-The frontend currently uses mock data from `frontend/src/data/mockData.ts`. API integration with React Query hooks and the SSE client is on the build roadmap.
-{% /callout %}
+The frontend fetches all data from the backend API via React Query hooks. See the [React Query hooks](/docs/frontend-hooks) page for details.
 
-### Mock data structure
-
-The mock data in `mockData.ts` provides sample conversations that exercise the full UI:
-
-- Wire transfer events with high-risk agent analyses
-- Velocity alerts with mixed agent assessments
-- Security alerts with moderator dissent
+- **`useConversations`** — Polls `GET /api/conversations` every 5 seconds
+- **`useDecision`** — `POST /api/decisions/{id}` mutation with query invalidation
+- **`useScenarios`** — Fetches and submits scenarios via queue API
+- **`useSSE`** — Fetch-based SSE client for streaming updates
 
 ---
 
@@ -82,14 +89,16 @@ The mock data in `mockData.ts` provides sample conversations that exercise the f
 
 **File:** `frontend/src/App.tsx`
 
-The main App component renders the sidebar, conversation view, and memory panel in a three-column layout. It currently reads from mock data rather than making API calls.
+Wraps `AppShell` in a `QueryClientProvider` for React Query.
+
+**File:** `frontend/src/components/layout/AppShell.tsx`
+
+The main layout component uses `useConversations()` for the sidebar list, `useDecision()` for action submissions, and manages view mode, selected conversation, and memory drawer state.
 
 ---
 
-## Future: API integration
+## ScenarioPanel
 
-The planned API integration will use:
+**File:** `frontend/src/components/ScenarioPanel.tsx`
 
-- **React Query** for data fetching and caching
-- **EventSource** or fetch-based SSE client for streaming
-- **Optimistic updates** for RM action submissions
+Displays available scenarios in the sidebar footer. Uses `useScenarios()` to fetch the list and `useSubmitScenario()` to submit. Shows a loading spinner while the pipeline runs.

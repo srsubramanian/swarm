@@ -113,10 +113,61 @@ interface Conversation {
   moderatorSummary: ModeratorSummaryData;
   actionRequired: ActionRequired;
   clientMemory: ClientMemory;
+  decision?: DecisionRecord | null;
 }
 ```
 
-The top-level type representing a complete event analysis with all agent data.
+The top-level type representing a complete event analysis with all agent data. The `decision` field is populated after an RM submits a decision.
+
+### DecisionPayload
+
+```typescript
+interface DecisionPayload {
+  conversationId: string;
+  optionId: string;
+  action: string;
+  justification: string;
+}
+```
+
+Used by the `useDecision` mutation to submit RM decisions. The hook converts `optionId` to `option_id` (snake_case) for the backend.
+
+### DecisionRecord
+
+```typescript
+interface DecisionRecord {
+  optionId: string;
+  action: string;
+  justification: string;
+  decidedAt: string;
+}
+```
+
+Returned by the backend after a decision is recorded. Maps to `ConversationRecord.decision`.
+
+### Scenario
+
+```typescript
+interface Scenario {
+  name: string;
+  title: string;
+  client_name: string;
+  event_type: string;
+}
+```
+
+Scenario metadata from `GET /api/queue/scenarios`. Used by the `ScenarioPanel` component.
+
+### SSEEvent
+
+```typescript
+interface SSEEvent {
+  event: string;
+  data: Record<string, unknown>;
+}
+```
+
+Parsed SSE event from streaming endpoints.
 
 ---
 
@@ -124,9 +175,12 @@ The top-level type representing a complete event analysis with all agent data.
 
 | Frontend (TypeScript) | Backend (Python) |
 |----------------------|-----------------|
-| `AgentInfo` | `AgentAnalysisResponse` |
-| `ActionOption` | `ActionOptionResponse` |
-| `ModeratorSummaryData` | `ModeratorSynthesisResponse` |
-| `Conversation` | `AnalyzeResponse` (partial) |
+| `AgentInfo` | `AgentInfoRecord` |
+| `ActionOption` | `ActionOptionRecord` |
+| `ActionRequired` | `ActionRequiredRecord` |
+| `ModeratorSummaryData` | `ModeratorSummaryRecord` |
+| `ClientMemory` | `ClientMemoryRecord` |
+| `DecisionRecord` | `DecisionRecord` |
+| `Conversation` | `ConversationRecord` |
 
-Field naming conventions differ by language: `camelCase` in TypeScript, `snake_case` in Python. The API response uses Python conventions; the frontend transforms as needed.
+The backend uses Pydantic's `alias_generator=to_camel` to serialize `snake_case` Python fields as `camelCase` JSON, matching the frontend TypeScript types 1:1. No client-side transformation is needed.
